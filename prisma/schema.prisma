@@ -1,0 +1,294 @@
+// Design Project Tracker — Prisma schema (v2 workflow)
+// Local dev uses SQLite. To switch to PostgreSQL, change `provider` below to
+// "postgresql" and point DATABASE_URL at your Postgres instance (see README).
+// The runtime driver adapter is picked automatically in src/lib/db.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// The connection URL lives in prisma.config.ts (DATABASE_URL).
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Enums (add new values here to extend) ──────────────────────────────────
+
+enum Role {
+  HEAD
+  MANAGER
+  ASSOCIATE_DESIGNER
+  TEAM_MEMBER
+}
+
+enum ProjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ON_HOLD
+  UNDER_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskType {
+  DESIGN
+  REVISION
+  MEETING
+  RESEARCH
+  OTHER
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  OCCUPIED
+  PARTIALLY_AVAILABLE
+  ON_LEAVE
+}
+
+enum SuggestionCategory {
+  PROCESS
+  TOOLS
+  WORKLOAD
+  OTHER
+}
+
+enum SuggestionStatus {
+  NEW
+  UNDER_CONSIDERATION
+  IMPLEMENTED
+  DECLINED
+}
+
+// ─── Users, teams & skills ──────────────────────────────────────────────────
+// Each MANAGER owns one team: the users whose managerId points to them.
+
+model User {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  passwordHash String
+  role         Role
+  jobTitle     String? // e.g. "Senior UI Designer", "UX Specialist"
+  isActive     Boolean @default(true)
+
+  // Home team (Associate Designers & Team Members only)
+  managerId String?
+  manager   User?   @relation("TeamMembership", fields: [managerId], references: [id])
+  reports   User[]  @relation("TeamMembership")
+
+  // Manual availability (set by the person, their manager or the Head; null = automatic)
+  availabilityOverride     AvailabilityStatus?
+  availabilityOverrideAt   DateTime?
+  availabilityOverrideById String?
+  availabilityOverrideBy   User?               @relation("AvailabilitySetBy", fields: [availabilityOverrideById], references: [id])
+  availabilitySetFor       User[]              @relation("AvailabilitySetBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  skills            UserSkill[]
+  createdProjects   Project[]             @relation("ProjectCreator")
+  managedProjects   ProjectManager[]      @relation("ProjectManagerUser")
+  managersAssigned  ProjectManager[]      @relation("ProjectManagerAssignedBy")
+  assignments       ProjectAssignment[]   @relation("AssignmentUser")
+  assignmentsMade   ProjectAssignment[]   @relation("AssignmentBy")
+  statusChanges     ProjectStatusChange[]
+  projectLinks      ProjectLink[]
+  timeLogs          TimeLog[]             @relation("TimeLogUser")
+  timeLogsEntered   TimeLog[]             @relation("TimeLogLoggedBy")
+  timeLogComments   TimeLogComment[]
+  suggestions       Suggestion[]
+  suggestionReplies SuggestionReply[]
+  suggestionReads   SuggestionRead[]
+
+  @@index([managerId])
+  @@index([role])
+}
+
+model Skill {
+  id    String      @id @default(cuid())
+  name  String      @unique
+  users UserSkill[]
+}
+
+model UserSkill {
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillId String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([userId, skillId])
+  @@index([skillId])
+}
+
+// ─── Projects ───────────────────────────────────────────────────────────────
+// The Design Head creates a project and assigns one or more Design Managers.
+// Each assigned manager onboards people from their own team.
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  client      String
+  description String
+  startDate   DateTime // calendar date stored as UTC midnight
+  eta         DateTime // target completion date (UTC midnight)
+  priority    Priority      @default(MEDIUM)
+  status      ProjectStatus @default(NOT_STARTED)
+
+  createdById String
+  createdBy   User   @relation("ProjectCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  managers      ProjectManager[]
+  assignments   ProjectAssignment[]
+  statusChanges ProjectStatusChange[]
+  links         ProjectLink[]
+  timeLogs      TimeLog[]
+
+  @@index([status])
+}
+
+model ProjectManager {
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  managerId    String
+  manager      User     @relation("ProjectManagerUser", fields: [managerId], references: [id])
+  assignedById String
+  assignedBy   User     @relation("ProjectManagerAssignedBy", fields: [assignedById], references: [id])
+  assignedAt   DateTime @default(now())
+
+  @@id([projectId, managerId])
+  @@index([managerId])
+}
+
+// A designer onboarded onto a project by their manager.
+model ProjectAssignment {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation("AssignmentUser", fields: [userId], references: [id])
+  assignedById String
+  assignedBy   User     @relation("AssignmentBy", fields: [assignedById], references: [id])
+  assignedAt   DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model ProjectStatusChange {
+  id          String         @id @default(cuid())
+  projectId   String
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromStatus  ProjectStatus?
+  toStatus    ProjectStatus
+  changedById String
+  changedBy   User           @relation(fields: [changedById], references: [id])
+  changedAt   DateTime       @default(now())
+
+  @@index([projectId, changedAt])
+}
+
+// Figma links shown in the project description.
+model ProjectLink {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String
+  url       String
+  addedById String
+  addedBy   User     @relation(fields: [addedById], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ─── Time logs (no approval step; questions go in the comment thread) ───────
+
+model TimeLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation("TimeLogUser", fields: [userId], references: [id])
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  date        DateTime // calendar date stored as UTC midnight
+  hours       Float // 0.5 increments
+  description String
+  taskType    TaskType
+
+  loggedById String // the person themselves, or a manager logging on their behalf
+  loggedBy   User   @relation("TimeLogLoggedBy", fields: [loggedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  comments TimeLogComment[]
+
+  @@index([userId, date])
+  @@index([projectId, date])
+}
+
+model TimeLogComment {
+  id        String   @id @default(cuid())
+  timeLogId String
+  timeLog   TimeLog  @relation(fields: [timeLogId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([timeLogId, createdAt])
+}
+
+// ─── Suggestions corner ─────────────────────────────────────────────────────
+
+model Suggestion {
+  id             String             @id @default(cuid())
+  authorId       String // always stored; hidden in the UI when anonymous
+  author         User               @relation(fields: [authorId], references: [id])
+  title          String
+  category       SuggestionCategory
+  message        String
+  anonymous      Boolean            @default(false)
+  status         SuggestionStatus   @default(NEW)
+  createdAt      DateTime           @default(now())
+  lastActivityAt DateTime           @default(now())
+
+  replies SuggestionReply[]
+  reads   SuggestionRead[]
+
+  @@index([authorId])
+  @@index([status])
+}
+
+model SuggestionReply {
+  id           String     @id @default(cuid())
+  suggestionId String
+  suggestion   Suggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  authorId     String
+  author       User       @relation(fields: [authorId], references: [id])
+  message      String
+  createdAt    DateTime   @default(now())
+
+  @@index([suggestionId, createdAt])
+}
+
+// Per-user "last read" marker that drives unread indicators.
+model SuggestionRead {
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  suggestionId String
+  suggestion   Suggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  lastReadAt   DateTime
+
+  @@id([userId, suggestionId])
+}
