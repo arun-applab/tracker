@@ -2,41 +2,61 @@
 
 Internal web app for the Applab design department: project tracking, time logging with discussion threads, Figma links, skills, team availability and a suggestions corner — with role-based access for the Design Head, Design Managers, Associate Designers and Team Members.
 
-**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind CSS v4 + shadcn/ui · Figtree font · Prisma 7 (SQLite locally, PostgreSQL-ready) · NextAuth (credentials) · Recharts
+**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind CSS v4 + shadcn/ui · Figtree font (self-hosted) · Prisma 7 · PostgreSQL (hosted on Railway) · NextAuth (credentials) · Recharts
 
 ---
 
 ## 1. Setup
 
-Requirements: **Node.js 20.19+** (22 LTS recommended) and npm.
+The app uses **PostgreSQL**. Requirements: **Node.js 20.19+** (22 LTS recommended), npm, and a Postgres database — a Railway Postgres (see **Deploy to Railway** below) or a local one.
 
 ```bash
 npm install                 # also runs `prisma generate`
-cp .env.example .env        # skip if .env already exists
-npm run setup               # creates dev.db from migrations + seeds sample data
+cp .env.example .env        # then put your Postgres URL in DATABASE_URL
+npm run setup               # creates the tables + loads the Applab team and sample data
 npm run dev                 # http://localhost:3000
 ```
 
-Before using it beyond your laptop, set `NEXTAUTH_SECRET` in `.env` to a long random string (`openssl rand -base64 32`).
+Use a separate database for local development — never point your laptop at the live one.
 
 | Script | What it does |
 | --- | --- |
 | `npm run dev` | Start the dev server |
-| `npm run build` / `npm start` | Production build / serve |
+| `npm run build` | Production build |
+| `npm start` | Apply pending migrations, then serve (used by Railway) |
 | `npm run setup` | Apply migrations + seed (first run) |
 | `npm run db:seed` | Re-seed (wipes and recreates all data) |
 | `npm run db:reset` | Drop the database, re-apply migrations, seed |
 | `npm run db:migrate:dev` | Create a new migration after editing `prisma/schema.prisma` |
+| `npm run db:copy-from-sqlite` | One-off: copy data from the old SQLite `dev.db` into `DATABASE_URL` |
 | `npm run typecheck` / `npm run lint` | Type-check / lint |
 
 ### Environment variables
 
-| Variable | Default | Notes |
+| Variable | Example | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | `file:./dev.db` | SQLite file, or a `postgresql://` URL |
-| `NEXTAUTH_SECRET` | — | Required. Signs session tokens |
-| `NEXTAUTH_URL` | `http://localhost:3000` | Public URL of the app |
+| `DATABASE_URL` | `postgresql://user:pass@host:5432/railway` | Required at runtime |
+| `NEXTAUTH_SECRET` | output of `openssl rand -base64 32` | Required. Signs session tokens |
+| `NEXTAUTH_URL` | `https://tracker-production.up.railway.app` | Public URL of the app |
 | `APP_TIMEZONE` | `Asia/Qatar` | Defines "today", the Mon–Sun week and the 7-day backdate window |
+
+---
+
+## Deploy to Railway
+
+1. **Project:** railway.com → New Project → Deploy from GitHub repo → `arun-applab/tracker`.
+2. **Database:** + New → Database → **PostgreSQL**.
+3. **App variables** (tracker service → Variables):
+   - `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`
+   - `NEXTAUTH_SECRET` = a long random string
+   - `NEXTAUTH_URL` = the domain from Settings → Networking → Generate Domain (with `https://`)
+   - `APP_TIMEZONE` = `Asia/Qatar`
+4. **Deploy.** Railway runs `npm install` → `npm run build` → `npm start`. `npm start` runs `prisma migrate deploy` first, so the tables are created automatically on the first deploy.
+5. **Data** (from your Mac, using the Postgres service's `DATABASE_PUBLIC_URL`):
+   - Your existing data: `DATABASE_URL="<DATABASE_PUBLIC_URL>" npm run db:copy-from-sqlite` — copies everything from `dev.db` in one transaction. It refuses to run if the database already has users (add `-- --force` to wipe and copy again).
+   - Or a fresh start: `DATABASE_URL="<DATABASE_PUBLIC_URL>" npm run db:seed`
+
+Every later `git push` to `main` redeploys; new migrations are applied automatically on start.
 
 ---
 
@@ -72,7 +92,7 @@ Projects, time entries, comments, starter skills and suggestions are **sample da
 
 | | Design Head | Design Manager | Associate Designer / Team Member |
 | --- | --- | --- | --- |
-| Projects | Creates projects, edits details, assigns **one or more** Design Managers; sees **all** projects | Sees only projects assigned to them; **onboards people from their own team**; changes status; **cannot create** projects | Sees only projects they're onboarded to |
+| Projects | Creates projects, edits details, assigns **one or more** Design Managers; sees **all** projects | Sees only projects assigned to them; **onboards people from their own team or borrows from any other team**; changes status; **cannot create** projects | Sees only projects they're onboarded to (including ones they're borrowed into) |
 | Figma links | View / add / remove any | View / add; remove own or on their projects | View / add; remove own |
 | Time | Views all entries; comments on any entry | Logs **own** time and time for **own team** on their projects; edits any entry on their projects | Logs own time; edits/deletes own entries for **7 days** |
 | Hours per person | All projects | Projects they manage | — (only their own timesheet and hours) |
@@ -91,6 +111,10 @@ Rules are enforced **server-side** in `src/server/permissions.ts` and the servic
 - **No approval step.** Every entry has a comment thread: a manager asks a question, the person replies. Threads waiting for you show on the bell in the top bar, on your dashboard, and as a red comment chip in log tables.
 - The owner can edit/delete their entry for 7 days; after that only the project's Design Manager can change it.
 
+### Theme colour
+
+All dark buttons, active nav pills and dark tiles use one gradient token. Change `--ink-start` and `--ink-end` at the top of `src/app/globals.css` to re-theme them.
+
 ### Availability
 
 Everyone sets their status from the **status pill in the top bar** (Available, Partially Available, Occupied, On Leave, or *Automatic*). Automatic = from active projects: any In Progress / Under Review project → Occupied; only Not Started / On Hold → Partially Available; none → Available. Managers can change their team's status from **Availability** or **My Team**; the badge shows whether it was set by the person or by someone else.
@@ -98,48 +122,16 @@ Everyone sets their status from the **status pill in the top bar** (Available, P
 ### Decisions made where the request was open
 
 - Design Managers are working designers too, so they log their own time (My Timesheet) on projects they manage.
-- A manager onboards only from their own team; cross-team work happens by the Head assigning several managers to one project. Removing a manager from a project also removes the people they onboarded (logged hours are kept).
+- **Borrowing:** any assigned Design Manager can onboard people from another team. Borrowed people are tagged "Borrowed from X's team", sit in the borrowing manager's column, and their hours count as "Borrowed" in the project's own-team / borrowed split. The borrowing manager can log time for them; the lending manager sees where their people are borrowed and the hours logged (My Team → Lent to other teams) but can't open the project. The Design Head's dashboard shows a cross-team summary.
+- A manager can only remove people they onboarded or people from their own team. Removing a manager from a project also removes the people they onboarded (logged hours are kept).
 - "Overdue" = past ETA and not Completed or Cancelled.
 - Prasun Sachan's email wasn't in the list, so it's seeded as `prasun@applab.qa` — change it under Users & Skills if different. Khalil El-Hayek and Rashim Perumbumkattil are not seeded (add them under Users & Skills if needed).
 
 ---
 
-## Upgrading an existing install
+## Moved from SQLite
 
-The v2 workflow adds a migration (`20261015000000_workflow_v2`). From the project folder:
-
-```bash
-npm install
-npm run db:reset     # drops the dev database, applies all migrations, loads the Applab team
-npm run dev
-```
-
-`npx prisma migrate deploy` also works if you want to keep existing data — each project's old owning manager becomes its assigned manager.
-
----
-
-## 4. Switching to PostgreSQL
-
-The runtime picks its database driver from `DATABASE_URL` automatically (`src/lib/db.ts`), so only three things change:
-
-1. **Schema** — in `prisma/schema.prisma` set:
-   ```prisma
-   datasource db {
-     provider = "postgresql"
-   }
-   ```
-2. **Env** — point `DATABASE_URL` at Postgres:
-   ```
-   DATABASE_URL="postgresql://user:password@localhost:5432/design_tracker?schema=public"
-   ```
-3. **Migrations** — the shipped migration is SQLite SQL, so start a fresh history:
-   ```bash
-   rm -rf prisma/migrations
-   npx prisma migrate dev --name init   # creates Postgres migration + tables
-   npm run db:seed
-   ```
-
-Optional: Postgres string matching is case-sensitive; add `mode: "insensitive"` to the `contains` filters in `src/server/services/projects.ts` (`listProjects`) for case-insensitive project search.
+Earlier versions stored data in a local SQLite file (`dev.db`). The schema now targets PostgreSQL and the migrations were regenerated for it (`prisma/migrations/20261015120000_init_postgres`). To bring old data across, use `npm run db:copy-from-sqlite` (see Deploy to Railway, step 5). Keep `dev.db` until you've confirmed the copy.
 
 ---
 

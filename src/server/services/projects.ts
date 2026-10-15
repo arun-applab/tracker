@@ -56,7 +56,7 @@ export type ProjectListFilters = {
 
 export async function listProjects(actor: Actor, f: ProjectListFilters = {}) {
   const and: Prisma.ProjectWhereInput[] = [projectScope(actor)];
-  if (f.q) and.push({ OR: [{ name: { contains: f.q } }, { client: { contains: f.q } }] });
+  if (f.q) and.push({ OR: [{ name: { contains: f.q, mode: "insensitive" } }, { client: { contains: f.q, mode: "insensitive" } }] });
   if (f.status) and.push({ status: f.status });
   if (f.managerId) and.push({ managers: { some: { managerId: f.managerId } } });
   if (f.priority) and.push({ priority: f.priority });

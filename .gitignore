@@ -49,3 +49,5 @@ node_modules/
 *.swp
 Archive.zip
 /tracker/
+exports/
+_to_delete/

@@ -1,6 +1,6 @@
 // Design Project Tracker — Prisma schema (v2 workflow)
-// Local dev uses SQLite. To switch to PostgreSQL, change `provider` below to
-// "postgresql" and point DATABASE_URL at your Postgres instance (see README).
+// Database: PostgreSQL (Railway in production). The connection URL is DATABASE_URL.
+
 // The runtime driver adapter is picked automatically in src/lib/db.ts.
 
 generator client {
@@ -8,9 +8,9 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
-// The connection URL lives in prisma.config.ts (DATABASE_URL).
+// The connection URL comes from DATABASE_URL (see prisma.config.ts).
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // ─── Enums (add new values here to extend) ──────────────────────────────────
