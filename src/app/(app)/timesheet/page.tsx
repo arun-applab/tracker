@@ -38,7 +38,7 @@ function EntryChip({ log }: { log: LogRow }) {
 }
 
 export default async function TimesheetPage({ searchParams }: { searchParams: Promise<{ week?: string }> }) {
-  const actor = await requireActor(["ASSOCIATE_DESIGNER", "TEAM_MEMBER", "MANAGER"]);
+  const actor = await requireActor(["ASSOCIATE_DESIGNER", "MID_DESIGNER", "MANAGER"]);
   const { week } = await searchParams;
   const today = todayIso();
   const anchor = week && isValidIso(week) ? week : today;

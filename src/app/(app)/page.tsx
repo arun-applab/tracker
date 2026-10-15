@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowLeftRight, ArrowRight, CalendarClock, Clock, FolderKanban, MessageCircle, MessageSquareText, Plus, Timer, UserRoundX } from "lucide-react";
-import { AvailabilityBadge, OverdueBadge, PriorityBadge, ProjectStatusBadge } from "@/components/app/badges";
+import { AlertTriangle, ArrowLeftRight, ArrowRight, CalendarClock, Clock, FolderKanban, Hourglass, MessageCircle, MessageSquareText, Plus, Timer, UserRoundX } from "lucide-react";
+import { ProjectReviewActions } from "@/components/app/project-review";
+import { ApprovalBadge, AvailabilityBadge, OverdueBadge, PriorityBadge, ProjectStatusBadge } from "@/components/app/badges";
 import { HoursBarChart, StatusBarChart } from "@/components/app/dashboard-charts";
 import { EmptyState } from "@/components/app/empty-state";
 import { PageHeader, PanelHeader } from "@/components/app/page-header";
@@ -82,6 +83,27 @@ async function HeadHome({ actor }: { actor: Actor }) {
         <StatCard label="New suggestions" value={d.newSuggestions} hint={d.unreadSuggestions ? `${d.unreadSuggestions} unread in inbox` : "Inbox is up to date"} icon={MessageSquareText} tone={d.unreadSuggestions ? "warn" : "default"} href="/suggestions" />
       </div>
 
+      {d.pendingRequests.length > 0 && (
+        <section className="mb-6 rounded-[28px] border border-amber-200 bg-amber-50/80 px-5 py-4">
+          <p className="mb-3 flex items-center gap-2 font-semibold">
+            <Hourglass className="size-4 text-amber-700" />
+            Project requests waiting for your approval
+            <span className="rounded-full bg-amber-200/80 px-2 py-0.5 text-xs font-semibold text-amber-900 tabular">{d.pendingRequests.length}</span>
+          </p>
+          <ul className="grid gap-2">
+            {d.pendingRequests.map((p) => (
+              <li key={p.id} className="tile flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
+                <Link href={`/projects/${p.id}`} className="min-w-0 flex-1 hover:underline">
+                  <span className="block truncate font-medium">{p.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{p.client} · requested by {p.createdBy.name} · ETA {formatDate(p.eta)}</span>
+                </Link>
+                <ProjectReviewActions projectId={p.id} projectName={p.name} size="sm" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="mb-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
         <section className="panel pb-5">
           <PanelHeader title="Projects by status" description={`All ${d.totalProjects} projects`} />
@@ -159,13 +181,36 @@ async function ManagerHome({ actor }: { actor: Actor }) {
         title={greeting(actor.name)}
         description="Your projects, your team and what needs your attention."
         actions={
-          options && (
-            <TimeLogDialog options={options}>
-              <Button size="lg"><Plus />Add time</Button>
-            </TimeLogDialog>
-          )
+          <>
+            <Button asChild variant="outline" size="lg"><Link href="/projects/new"><Plus />Request project</Link></Button>
+            {options && (
+              <TimeLogDialog options={options}>
+                <Button size="lg"><Plus />Add time</Button>
+              </TimeLogDialog>
+            )}
+          </>
         }
       />
+      {d.myRequests.length > 0 && (
+        <section className="mb-6 panel px-5 py-4">
+          <p className="mb-3 flex items-center gap-2 font-semibold"><Hourglass className="size-4 text-amber-700" />Your project requests</p>
+          <ul className="grid gap-2">
+            {d.myRequests.map((p) => (
+              <li key={p.id}>
+                <Link href={`/projects/${p.id}`} className="tile flex items-center gap-3 px-4 py-3 transition hover:bg-white">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{p.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {p.approval === "REJECTED" ? (p.approvalNote ? `Declined: “${p.approvalNote}” — edit to resubmit` : "Declined — edit to resubmit") : `${p.client} · waiting for the Design Head`}
+                    </span>
+                  </span>
+                  <ApprovalBadge approval={p.approval} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Hours on my projects" value={formatHours(d.hoursOnMyProjects)} hint={`This week · ${weekLabel()}`} icon={Clock} href="/time-logs" tone="dark" />
         <StatCard label="My team's hours" value={formatHours(d.hoursByMyTeam)} hint={`You: ${formatHours(d.myWeekHours)} this week`} icon={Timer} href="/team" />
@@ -177,7 +222,7 @@ async function ManagerHome({ actor }: { actor: Actor }) {
         <section className="panel pb-6">
           <PanelHeader
             title="My projects"
-            description="Active projects the Design Head assigned to you — onboard your team from each project"
+            description="Active, approved projects you manage — onboard your team from each project"
             actions={<Link href="/projects" className="icon-btn" aria-label="All projects"><ArrowRight /></Link>}
           />
           <div className="space-y-2 px-6 pt-4">
@@ -247,7 +292,7 @@ async function ManagerHome({ actor }: { actor: Actor }) {
   );
 }
 
-// ─── Associate Designer / Team Member ───────────────────────────────────────
+// ─── Associate Designer / Mid Designer ───────────────────────────────────────
 
 async function DesignerHome({ actor }: { actor: Actor }) {
   const [d, options] = await Promise.all([getDesignerDashboard(actor), getLogFormOptions(actor)]);

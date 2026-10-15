@@ -9,7 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTable, type SortColumn, type SortRow } from "@/components/app/sortable-table";
 import { AVAILABILITY, AVAILABILITY_STATUSES, ROLE_LABEL, type AvailabilityStatus } from "@/lib/constants";
 import { formatHours } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -18,20 +18,33 @@ import { getAvailability, type AvailabilityPerson } from "@/server/services/avai
 
 export const metadata = { title: "Team availability" };
 
-function PersonRow({ p, lead }: { p: AvailabilityPerson; lead?: boolean }) {
-  return (
-    <TableRow className={cn(lead && "bg-white/50")}>
-      <TableCell className="pl-5">
-        <div className="flex items-center gap-3">
-          <Avatar name={p.name} className="size-9 text-[11px]" />
-          <div className="min-w-0">
-            <div className="truncate font-medium">{p.name}</div>
-            <div className="truncate text-xs text-muted-foreground">{p.jobTitle}</div>
-          </div>
+const ROLE_ORDER: Record<string, number> = { HEAD: 0, MANAGER: 1, MID_DESIGNER: 2, ASSOCIATE_DESIGNER: 3 };
+const STATUS_ORDER: Record<AvailabilityStatus, number> = { AVAILABLE: 0, PARTIALLY_AVAILABLE: 1, OCCUPIED: 2, ON_LEAVE: 3 };
+
+const COLUMNS: SortColumn[] = [
+  { label: "Name", className: "pl-5", cellClassName: "pl-5" },
+  { label: "Role" },
+  { label: "Current status" },
+  { label: "Active projects", cellClassName: "min-w-56", firstDir: "desc" },
+  { label: "Skills", cellClassName: "min-w-44" },
+  { label: "Hours this week", className: "pr-5 text-right", cellClassName: "pr-5 text-right text-[15px] font-semibold tabular" },
+];
+
+function personRow(p: AvailabilityPerson, lead: boolean): SortRow {
+  return {
+    id: p.id,
+    className: cn(lead && "bg-white/50"),
+    sort: [p.name, ROLE_ORDER[p.role], STATUS_ORDER[p.status], p.activeProjects.length, p.skills.length ? p.skills.join(", ") : null, p.hoursThisWeek],
+    cells: [
+      <div key="n" className="flex items-center gap-3">
+        <Avatar name={p.name} className="size-9 text-[11px]" />
+        <div className="min-w-0">
+          <div className="truncate font-medium">{p.name}{lead && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">Lead</span>}</div>
+          <div className="truncate text-xs text-muted-foreground">{p.jobTitle}</div>
         </div>
-      </TableCell>
-      <TableCell><RoleBadge role={p.role} /></TableCell>
-      <TableCell>
+      </div>,
+      <RoleBadge key="r" role={p.role} />,
+      <div key="s">
         {p.canSet ? (
           <StatusSwitch userId={p.id} status={p.status} autoStatus={p.autoStatus} overridden={p.overridden} compact label={`${p.name.split(" ")[0]}'s availability`} />
         ) : (
@@ -43,8 +56,8 @@ function PersonRow({ p, lead }: { p: AvailabilityPerson; lead?: boolean }) {
             {p.setBy === "self" ? "Set by themselves" : `Set by ${p.setBy}`}
           </p>
         )}
-      </TableCell>
-      <TableCell className="min-w-56">
+      </div>,
+      <div key="p">
         {p.activeProjects.length === 0 ? (
           <span className="text-sm text-muted-foreground">None</span>
         ) : (
@@ -59,25 +72,28 @@ function PersonRow({ p, lead }: { p: AvailabilityPerson; lead?: boolean }) {
             Borrowed: {ap.name} for {ap.borrowedBy}&apos;s team
           </p>
         ))}
-      </TableCell>
-      <TableCell className="min-w-44"><SkillChips skills={p.skills} max={3} /></TableCell>
-      <TableCell className="pr-5 text-right text-[15px] font-semibold tabular">{formatHours(p.hoursThisWeek)}</TableCell>
-    </TableRow>
-  );
+      </div>,
+      <SkillChips key="k" skills={p.skills} max={3} />,
+      formatHours(p.hoursThisWeek),
+    ],
+  };
 }
 
 export default async function AvailabilityPage({ searchParams }: { searchParams: Promise<{ status?: string; role?: string; skill?: string }> }) {
   const actor = await requireActor(["HEAD", "MANAGER"]);
   const sp = await searchParams;
   const status = AVAILABILITY_STATUSES.includes(sp.status as AvailabilityStatus) ? (sp.status as AvailabilityStatus) : undefined;
-  const role = sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "TEAM_MEMBER" ? sp.role : undefined;
+  const role = sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "MID_DESIGNER" ? sp.role : undefined;
   const skill = sp.skill?.trim().toLowerCase() || undefined;
   const match = (p: AvailabilityPerson) =>
     (!status || p.status === status) && (!role || p.role === role) && (!skill || p.skills.some((s) => s.toLowerCase().includes(skill)));
 
-  const teams = (await getAvailability(actor)).map((t) => ({ ...t, all: [t.manager, ...t.people], shown: [t.manager, ...t.people].filter(match) }));
-  const everyone = teams.flatMap((t) => t.all);
+  const allTeams = (await getAvailability(actor)).map((t) => ({ ...t, all: [t.manager, ...t.people], shown: [t.manager, ...t.people].filter(match) }));
+  const everyone = allTeams.flatMap((t) => t.all);
   const filtered = !!(status || role || skill);
+  // With a filter on, only teams that have someone matching are shown.
+  const teams = filtered ? allTeams.filter((t) => t.shown.length > 0) : allTeams;
+  const hiddenTeams = allTeams.length - teams.length;
 
   return (
     <>
@@ -114,14 +130,22 @@ export default async function AvailabilityPage({ searchParams }: { searchParams:
         <NativeSelect name="role" defaultValue={role ?? ""} className="w-52" aria-label="Role">
           <option value="">All roles</option>
           <option value="MANAGER">{ROLE_LABEL.MANAGER}</option>
+          <option value="MID_DESIGNER">{ROLE_LABEL.MID_DESIGNER}</option>
           <option value="ASSOCIATE_DESIGNER">{ROLE_LABEL.ASSOCIATE_DESIGNER}</option>
-          <option value="TEAM_MEMBER">{ROLE_LABEL.TEAM_MEMBER}</option>
         </NativeSelect>
         <Input type="search" name="skill" defaultValue={sp.skill} placeholder="Filter by skill…" className="w-52" aria-label="Skill" />
         {filtered && <Button variant="ghost" size="sm" asChild><Link href="/availability">Clear</Link></Button>}
       </AutoSubmitForm>
 
-      {teams.length === 0 && <EmptyState icon={UsersRound} title="No teams yet" description="Add Design Managers and their teams under Users & Skills." />}
+      {allTeams.length === 0 && <EmptyState icon={UsersRound} title="No teams yet" description="Add Design Managers and their teams under Users & Skills." />}
+      {allTeams.length > 0 && teams.length === 0 && (
+        <EmptyState icon={UsersRound} title="No one matches these filters" description="Try another status, role or skill." action={<Button variant="outline" asChild><Link href="/availability">Clear filters</Link></Button>} />
+      )}
+      {filtered && hiddenTeams > 0 && teams.length > 0 && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Showing {teams.length} of {allTeams.length} teams · {hiddenTeams} {hiddenTeams === 1 ? "team has" : "teams have"} no one matching
+        </p>
+      )}
 
       <div className="space-y-4">
         {teams.map((t) => {
@@ -144,27 +168,9 @@ export default async function AvailabilityPage({ searchParams }: { searchParams:
                   })}
                 </div>
               </summary>
-              {t.shown.length === 0 ? (
-                <p className="border-t border-black/[0.06] px-5 py-6 text-center text-sm text-muted-foreground">No one in this team matches the filters.</p>
-              ) : (
-                <div className="border-t border-black/[0.06]">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead className="pl-5">Name</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Current status</TableHead>
-                        <TableHead>Active projects</TableHead>
-                        <TableHead>Skills</TableHead>
-                        <TableHead className="pr-5 text-right">Hours this week</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {t.shown.map((p) => <PersonRow key={p.id} p={p} lead={p.id === t.manager.id} />)}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+              <div className="border-t border-black/[0.06]">
+                <SortableTable columns={COLUMNS} rows={t.shown.map((p) => personRow(p, p.id === t.manager.id))} defaultSort={{ col: 1, dir: "asc" }} />
+              </div>
             </details>
           );
         })}

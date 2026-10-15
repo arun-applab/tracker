@@ -5,7 +5,9 @@ import { badRequest, forbidden, notFound } from "@/lib/errors";
 import { toDbDate, toIso } from "@/lib/dates";
 import { todayIso } from "@/lib/server-time";
 import type { Prisma } from "@/generated/prisma/client";
-import type { Priority, ProjectStatus, Role } from "@/generated/prisma/enums";
+import type { Priority, ProjectApproval, ProjectStatus, Role } from "@/generated/prisma/enums";
+import { PROJECT_STATUS } from "@/lib/constants";
+import { firstName, headIds, notify } from "@/server/notify";
 import type { Actor } from "@/server/actor";
 import {
   accessOf,
@@ -15,12 +17,16 @@ import {
   canDeleteLink,
   canEditProjectDetails,
   canOnboard,
+  canReviewProject,
   canSeeTeamHours,
   canViewProject,
+  gateOf,
+  isApproved,
   isHead,
   isManager,
   isProjectManager,
-  type ProjectAccess,
+  needsApproval,
+  type ProjectGate,
 } from "@/server/permissions";
 import type { linkInput, projectInput } from "@/lib/validation";
 
@@ -41,18 +47,47 @@ const accessSelect = {
 } satisfies Prisma.ProjectSelect;
 
 export async function loadAccess(projectId: string) {
-  const p = await db.project.findUnique({ where: { id: projectId }, select: { id: true, status: true, ...accessSelect } });
+  const p = await db.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, name: true, status: true, approval: true, createdById: true, ...accessSelect },
+  });
   if (!p) throw notFound("Project not found");
-  return { ...p, access: accessOf(p) };
+  return { ...p, access: gateOf(p) };
 }
+
+export const PROJECT_SORTS = {
+  recent: "Newest first",
+  oldest: "Oldest first",
+  eta_asc: "ETA: soonest first",
+  eta_desc: "ETA: latest first",
+  name: "Name A–Z",
+} as const;
+export type ProjectSort = keyof typeof PROJECT_SORTS;
+export const isProjectSort = (v: unknown): v is ProjectSort => typeof v === "string" && v in PROJECT_SORTS;
 
 export type ProjectListFilters = {
   q?: string;
   status?: ProjectStatus;
   managerId?: string;
   priority?: Priority;
-  sort?: "eta_asc" | "eta_desc";
+  approval?: ProjectApproval;
+  sort?: ProjectSort;
 };
+
+function projectOrder(sort: ProjectSort = "recent"): Prisma.ProjectOrderByWithRelationInput[] {
+  switch (sort) {
+    case "oldest":
+      return [{ createdAt: "asc" }];
+    case "eta_asc":
+      return [{ eta: "asc" }, { name: "asc" }];
+    case "eta_desc":
+      return [{ eta: "desc" }, { name: "asc" }];
+    case "name":
+      return [{ name: "asc" }];
+    default:
+      return [{ createdAt: "desc" }];
+  }
+}
 
 export async function listProjects(actor: Actor, f: ProjectListFilters = {}) {
   const and: Prisma.ProjectWhereInput[] = [projectScope(actor)];
@@ -60,11 +95,13 @@ export async function listProjects(actor: Actor, f: ProjectListFilters = {}) {
   if (f.status) and.push({ status: f.status });
   if (f.managerId) and.push({ managers: { some: { managerId: f.managerId } } });
   if (f.priority) and.push({ priority: f.priority });
+  if (f.approval) and.push({ approval: f.approval });
 
   const projects = await db.project.findMany({
     where: { AND: and },
-    orderBy: [{ eta: f.sort === "eta_desc" ? "desc" : "asc" }, { name: "asc" }],
+    orderBy: projectOrder(f.sort),
     include: {
+      createdBy: { select: { id: true, name: true } },
       managers: { include: { manager: { select: { id: true, name: true } } }, orderBy: { assignedAt: "asc" } },
       assignments: { include: { user: { select: { id: true, name: true } } }, orderBy: { assignedAt: "asc" } },
       _count: { select: { links: true } },
@@ -93,8 +130,13 @@ export async function listProjects(actor: Actor, f: ProjectListFilters = {}) {
       // Totals only for Head / the project's managers; everyone else sees their own hours.
       hours: teamHours ? (totals.find((t) => t.projectId === p.id)?._sum.hours ?? 0) : null,
       myHours: mine.find((t) => t.projectId === p.id)?._sum.hours ?? 0,
-      overdue: isOverdue(p, today),
+      overdue: isApproved(p) && isOverdue(p, today),
       iManage: isProjectManager(actor, access),
+      approval: p.approval,
+      approvalNote: p.approvalNote,
+      createdAt: p.createdAt.toISOString(),
+      submittedAt: (p.submittedAt ?? p.createdAt).toISOString(),
+      createdBy: p.createdBy,
     };
   });
 }
@@ -105,7 +147,7 @@ export async function getProjectOr404(actor: Actor, id: string) {
   return p;
 }
 
-export type DetailLogFilters = { from?: string; to?: string; userId?: string; role?: "MANAGER" | "ASSOCIATE_DESIGNER" | "TEAM_MEMBER" };
+export type DetailLogFilters = { from?: string; to?: string; userId?: string; role?: "MANAGER" | "ASSOCIATE_DESIGNER" | "MID_DESIGNER" };
 
 const personSelect = { id: true, name: true, role: true, jobTitle: true, isActive: true, managerId: true } satisfies Prisma.UserSelect;
 
@@ -114,14 +156,15 @@ export async function getProjectDetail(actor: Actor, id: string, f: DetailLogFil
   const project = await db.project.findUniqueOrThrow({
     where: { id },
     include: {
-      createdBy: { select: { name: true } },
+      createdBy: { select: { id: true, name: true } },
+      reviewedBy: { select: { name: true } },
       managers: { orderBy: { assignedAt: "asc" }, include: { manager: { select: personSelect } } },
       assignments: { orderBy: { assignedAt: "asc" }, include: { user: { select: personSelect } } },
       statusChanges: { orderBy: { changedAt: "desc" }, include: { changedBy: { select: { name: true } } } },
       links: { orderBy: { createdAt: "desc" }, include: { addedBy: { select: { id: true, name: true } } } },
     },
   });
-  const access = accessOf(project);
+  const access = gateOf(project);
   const teamHours = canSeeTeamHours(actor, access);
 
   // Teams = one column per assigned manager. A person sits in the column of the manager who
@@ -199,9 +242,10 @@ export async function getProjectDetail(actor: Actor, id: string, f: DetailLogFil
     borrowedHours,
     myHours,
     logs,
-    overdue: isOverdue(project),
+    overdue: isApproved(project) && isOverdue(project),
     can: {
-      editDetails: canEditProjectDetails(actor),
+      editDetails: canEditProjectDetails(actor, access),
+      review: canReviewProject(actor) && project.approval === "PENDING",
       changeStatus: canChangeStatus(actor, access),
       onboard: canOnboard(actor, access),
       addLink: canAddLink(actor, access),
@@ -234,15 +278,15 @@ export async function listAssignableManagers() {
 }
 
 /**
- * People an actor may onboard: any active Associate Designer / Team Member from ANY team
+ * People an actor may onboard: any active Associate Designer / Mid Designer from ANY team
  * (other teams = borrowing). `ownedBy` marks people already on the project via someone else,
  * who the actor can't remove.
  */
-export async function getOnboardablePeople(actor: Actor, projectId: string, access: ProjectAccess) {
+export async function getOnboardablePeople(actor: Actor, projectId: string, access: ProjectGate) {
   if (!canOnboard(actor, access)) return [];
   const [users, current] = await Promise.all([
     db.user.findMany({
-      where: { isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "TEAM_MEMBER"] } },
+      where: { isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "MID_DESIGNER"] } },
       select: { id: true, name: true, role: true, jobTitle: true, manager: { select: { id: true, name: true } }, skills: { select: { skill: { select: { name: true } } } } },
       orderBy: { name: "asc" },
     }),
@@ -282,11 +326,20 @@ async function validateManagers(ids: string[]) {
 
 type ProjectInput = z.infer<typeof projectInput>;
 
+const projectLink = (id: string) => `/projects/${id}`;
+
+/**
+ * Head: the project is approved straight away and the assigned managers are told.
+ * Design Manager: the project is a request (they're assigned to it automatically) and waits for
+ * the Head's approval before anyone can be onboarded or log time.
+ */
 export async function createProject(actor: Actor, input: ProjectInput) {
-  if (!canCreateProject(actor)) throw forbidden("Only the Design Head can create projects.");
-  const managerIds = await validateManagers(input.managerIds);
+  if (!canCreateProject(actor)) throw forbidden("Only the Design Head and Design Managers can create projects.");
+  const request = needsApproval(actor);
+  const managerIds = await validateManagers(request ? [actor.id, ...input.managerIds] : input.managerIds);
   const status = input.status ?? "NOT_STARTED";
-  return db.project.create({
+  const now = new Date();
+  const project = await db.project.create({
     data: {
       name: input.name,
       client: input.client,
@@ -296,20 +349,45 @@ export async function createProject(actor: Actor, input: ProjectInput) {
       priority: input.priority,
       status,
       createdById: actor.id,
+      approval: request ? "PENDING" : "APPROVED",
+      submittedAt: request ? now : null,
+      ...(request ? {} : { reviewedById: actor.id, reviewedAt: now }),
       statusChanges: { create: { fromStatus: null, toStatus: status, changedById: actor.id } },
       managers: { create: managerIds.map((managerId) => ({ managerId, assignedById: actor.id })) },
     },
-    select: { id: true },
+    select: { id: true, name: true },
   });
+  if (request) {
+    await notify(await headIds(), {
+      type: "project_request",
+      title: "New project request",
+      body: `${actor.name} requested “${project.name}” for ${input.client}. Review it to approve or decline.`,
+      link: projectLink(project.id),
+      actorId: actor.id,
+    });
+  } else {
+    await notify(managerIds, {
+      type: "project_assigned",
+      title: "New project assigned to you",
+      body: `${actor.name} assigned you to “${project.name}”. You can now onboard your team.`,
+      link: projectLink(project.id),
+      actorId: actor.id,
+    });
+  }
+  return { id: project.id };
 }
 
 export async function updateProject(actor: Actor, id: string, input: ProjectInput) {
-  if (!canEditProjectDetails(actor)) throw forbidden("Only the Design Head can edit project details.");
-  const project = await db.project.findUnique({ where: { id }, include: { managers: true } });
-  if (!project) throw notFound("Project not found");
-  const managerIds = await validateManagers(input.managerIds);
+  const p = await loadAccess(id);
+  if (!canEditProjectDetails(actor, p.access)) {
+    throw forbidden(isManager(actor) && p.createdById === actor.id ? "This project is approved — only the Design Head can edit its details now." : "Only the Design Head can edit project details.");
+  }
+  const project = await db.project.findUniqueOrThrow({ where: { id }, include: { managers: true } });
+  // The requesting manager always stays on their own request.
+  const managerIds = await validateManagers(isHead(actor) ? input.managerIds : [actor.id, ...input.managerIds]);
   const removed = project.managers.map((m) => m.managerId).filter((m) => !managerIds.includes(m));
   const added = managerIds.filter((m) => !project.managers.some((x) => x.managerId === m));
+  const resubmit = !isHead(actor) && project.approval === "REJECTED";
 
   await db.$transaction(async (tx) => {
     await tx.project.update({
@@ -322,6 +400,7 @@ export async function updateProject(actor: Actor, id: string, input: ProjectInpu
         eta: toDbDate(input.eta),
         priority: input.priority,
         ...(input.status && { status: input.status }),
+        ...(resubmit && { approval: "PENDING", submittedAt: new Date(), reviewedById: null, reviewedAt: null }),
       },
     });
     if (input.status && input.status !== project.status) {
@@ -340,17 +419,74 @@ export async function updateProject(actor: Actor, id: string, input: ProjectInpu
     }
     for (const managerId of added) await tx.projectManager.create({ data: { projectId: id, managerId, assignedById: actor.id } });
   });
+
+  if (resubmit) {
+    await notify(await headIds(), {
+      type: "project_resubmitted",
+      title: "Project request resubmitted",
+      body: `${actor.name} updated “${input.name}” and sent it back for your approval.`,
+      link: projectLink(id),
+      actorId: actor.id,
+    });
+  }
+  if (project.approval === "APPROVED" && added.length) {
+    await notify(added, {
+      type: "project_assigned",
+      title: "New project assigned to you",
+      body: `${actor.name} assigned you to “${input.name}”. You can now onboard your team.`,
+      link: projectLink(id),
+      actorId: actor.id,
+    });
+  }
   return { id };
+}
+
+/** Design Head approves or declines a Design Manager's project request. */
+export async function reviewProject(actor: Actor, id: string, decision: "APPROVE" | "REJECT", note?: string) {
+  if (!canReviewProject(actor)) throw forbidden("Only the Design Head can approve project requests.");
+  const p = await loadAccess(id);
+  if (p.approval !== "PENDING") throw badRequest(p.approval === "APPROVED" ? "This project is already approved." : "This request was already declined.");
+  const approve = decision === "APPROVE";
+  await db.project.update({
+    where: { id },
+    data: { approval: approve ? "APPROVED" : "REJECTED", approvalNote: approve ? note || null : note, reviewedById: actor.id, reviewedAt: new Date() },
+  });
+  if (approve) {
+    await notify(p.access.managerIds, {
+      type: "project_approved",
+      title: "Project approved",
+      body: `${actor.name} approved “${p.name}”. You can now onboard designers and they can log time.${note ? ` Note: ${note}` : ""}`,
+      link: projectLink(id),
+      actorId: actor.id,
+    });
+  } else {
+    await notify([p.createdById], {
+      type: "project_rejected",
+      title: "Project request declined",
+      body: `${actor.name} declined “${p.name}”: ${note}. Edit the project to resubmit it.`,
+      link: projectLink(id),
+      actorId: actor.id,
+    });
+  }
+  return { id, approval: approve ? "APPROVED" : "REJECTED" };
 }
 
 export async function changeProjectStatus(actor: Actor, id: string, status: ProjectStatus) {
   const p = await loadAccess(id);
+  if (!isApproved(p)) throw badRequest("This project is waiting for the Design Head's approval.");
   if (!canChangeStatus(actor, p.access)) throw forbidden("Only the Design Head or the project's managers can change the status.");
   if (p.status === status) return { id };
   await db.$transaction([
     db.project.update({ where: { id }, data: { status } }),
     db.projectStatusChange.create({ data: { projectId: id, fromStatus: p.status, toStatus: status, changedById: actor.id } }),
   ]);
+  await notify([...p.access.managerIds, ...p.access.memberIds, ...(isHead(actor) ? [] : await headIds())], {
+    type: "project_status",
+    title: `${p.name}: ${PROJECT_STATUS[status].label}`,
+    body: `${actor.name} moved “${p.name}” from ${PROJECT_STATUS[p.status].label} to ${PROJECT_STATUS[status].label}.`,
+    link: projectLink(id),
+    actorId: actor.id,
+  });
   return { id };
 }
 
@@ -361,11 +497,12 @@ export async function changeProjectStatus(actor: Actor, id: string, status: Proj
  */
 export async function setProjectMembers(actor: Actor, id: string, memberIds: string[]) {
   const p = await loadAccess(id);
+  if (!isApproved(p)) throw badRequest("People can be onboarded once the Design Head approves this project.");
   if (!canOnboard(actor, p.access)) throw forbidden("Only the project's Design Managers can onboard people.");
   const wanted = [...new Set(memberIds)];
   if (wanted.length) {
-    const ok = await db.user.count({ where: { id: { in: wanted }, isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "TEAM_MEMBER"] } } });
-    if (ok !== wanted.length) throw badRequest("Only active Associate Designers and Team Members can be onboarded.");
+    const ok = await db.user.count({ where: { id: { in: wanted }, isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "MID_DESIGNER"] } } });
+    if (ok !== wanted.length) throw badRequest("Only active Associate Designers and Mid Designers can be onboarded.");
   }
   const current = await db.projectAssignment.findMany({ where: { projectId: id }, select: { userId: true, assignedById: true, user: { select: { managerId: true } } } });
   const mine = current.filter((c) => isHead(actor) || inActorSlice(actor, c)).map((c) => c.userId);
@@ -376,6 +513,39 @@ export async function setProjectMembers(actor: Actor, id: string, memberIds: str
     if (toRemove.length) await tx.projectAssignment.deleteMany({ where: { projectId: id, userId: { in: toRemove } } });
     for (const userId of toAdd) await tx.projectAssignment.create({ data: { projectId: id, userId, assignedById: actor.id } });
   });
+
+  const link = projectLink(id);
+  if (toAdd.length) {
+    await notify(toAdd, {
+      type: "onboarded",
+      title: `You're on ${p.name}`,
+      body: `${actor.name} onboarded you to “${p.name}”. You can log time on it now.`,
+      link,
+      actorId: actor.id,
+    });
+    // Borrowed people: tell their home manager.
+    const people = await db.user.findMany({ where: { id: { in: toAdd } }, select: { name: true, managerId: true } });
+    const byManager = new Map<string, string[]>();
+    for (const u of people) if (u.managerId && u.managerId !== actor.id) byManager.set(u.managerId, [...(byManager.get(u.managerId) ?? []), u.name]);
+    for (const [managerId, names] of byManager) {
+      await notify([managerId], {
+        type: "borrowed",
+        title: "Someone from your team was borrowed",
+        body: `${actor.name} onboarded ${names.join(", ")} to “${p.name}”.`,
+        link,
+        actorId: actor.id,
+      });
+    }
+  }
+  if (toRemove.length) {
+    await notify(toRemove, {
+      type: "offboarded",
+      title: `Removed from ${p.name}`,
+      body: `${firstName(actor.name)} removed you from “${p.name}”. Hours you already logged are kept.`,
+      link: null,
+      actorId: actor.id,
+    });
+  }
   return { id, added: toAdd.length, removed: toRemove.length };
 }
 

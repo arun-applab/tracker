@@ -156,7 +156,7 @@ export function TimeLogDialog({
 
           {forMember && (
             <div className="grid gap-2">
-              <Label htmlFor="tl-person">Team member</Label>
+              <Label htmlFor="tl-person">Mid designer</Label>
               <NativeSelect id="tl-person" value={form.userId} onChange={(e) => set("userId", e.target.value)} disabled={!form.projectId} required>
                 <option value="">{form.projectId ? "Select a person…" : "Choose a project first"}</option>
                 {people.map((p) => (

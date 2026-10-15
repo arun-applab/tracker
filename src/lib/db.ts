@@ -9,12 +9,18 @@ import { PrismaPg } from "@prisma/adapter-pg";
  * Switching databases only needs the schema `provider` + DATABASE_URL changed.
  */
 function createClient() {
-  const url = process.env.DATABASE_URL ?? "file:./dev.db";
-  const adapter =
-    url.startsWith("postgres://") || url.startsWith("postgresql://")
-      ? new PrismaPg({ connectionString: url })
-      : new PrismaBetterSqlite3({ url });
-  return new PrismaClient({ adapter });
+  const url = process.env.DATABASE_URL ?? "";
+  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
+    return new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+  }
+  if (url.startsWith("file:")) {
+    // The schema targets PostgreSQL now; the old dev.db can only be read by scripts/copy-sqlite-to-postgres.mjs.
+    throw new Error(
+      `DATABASE_URL points at a SQLite file (${url}), but the app now uses PostgreSQL. ` +
+        `Set DATABASE_URL in .env to a Postgres connection string (see README → Setup).`,
+    );
+  }
+  return new PrismaClient({ adapter: new PrismaBetterSqlite3({ url }) });
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };

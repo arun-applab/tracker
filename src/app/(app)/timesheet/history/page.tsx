@@ -19,7 +19,7 @@ export const metadata = { title: "Timesheet history" };
 type SP = Promise<{ from?: string; to?: string; project?: string }>;
 
 export default async function TimesheetHistoryPage({ searchParams }: { searchParams: SP }) {
-  const actor = await requireActor(["ASSOCIATE_DESIGNER", "TEAM_MEMBER", "MANAGER"]);
+  const actor = await requireActor(["ASSOCIATE_DESIGNER", "MID_DESIGNER", "MANAGER"]);
   const sp = await searchParams;
   const filters = {
     from: sp.from && isValidIso(sp.from) ? sp.from : undefined,

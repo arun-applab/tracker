@@ -52,8 +52,10 @@ async function pgColumns(table) {
   return new Map(r.rows.map((c) => [c.column_name, c.data_type]));
 }
 
-function convert(value, type) {
+function convert(value, type, column) {
   if (value === null || value === undefined) return null;
+  // The "Team Member" role was renamed to "Mid Designer".
+  if (column === "role" && value === "TEAM_MEMBER") return "MID_DESIGNER";
   if (type === "boolean") return value === 1 || value === true || value === "1" || value === "true";
   if (type.startsWith("timestamp")) {
     const d = typeof value === "number" ? new Date(value) : new Date(String(value).replace(" ", "T"));
@@ -90,7 +92,7 @@ try {
     const placeholders = insertNames.map((_, i) => `$${i + 1}`).join(", ");
     const sql = `INSERT INTO ${q(table)} (${insertNames.map(q).join(", ")}) VALUES (${placeholders})`;
     for (const row of rows) {
-      await client.query(sql, insertNames.map((c) => convert(row[c], cols.get(c))));
+      await client.query(sql, insertNames.map((c) => convert(row[c], cols.get(c), c)));
       if (table === "User") userRefs.push(row);
     }
     counts[table] = rows.length;

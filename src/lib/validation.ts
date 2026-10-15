@@ -70,7 +70,7 @@ export const logFilters = z.object({
   to: isoDate.optional(),
   projectId: id.optional(),
   userId: id.optional(),
-  role: z.enum(["MANAGER", "ASSOCIATE_DESIGNER", "TEAM_MEMBER"]).optional(),
+  role: z.enum(["MANAGER", "ASSOCIATE_DESIGNER", "MID_DESIGNER"]).optional(),
 });
 
 const password = z.string().min(8, "Password must be at least 8 characters").max(100);
@@ -79,7 +79,7 @@ export const userCreate = z.object({
   name: text(100, "Name"),
   email: z.email("Enter a valid email").transform((e) => e.toLowerCase()),
   password,
-  role: z.enum(["HEAD", "MANAGER", "ASSOCIATE_DESIGNER", "TEAM_MEMBER"]),
+  role: z.enum(["HEAD", "MANAGER", "ASSOCIATE_DESIGNER", "MID_DESIGNER"]),
   jobTitle: z.string().trim().max(80).optional().nullable(),
   managerId: id.optional().nullable(),
 });
@@ -88,7 +88,7 @@ export const userUpdate = z.object({
   name: text(100, "Name").optional(),
   email: z.email("Enter a valid email").transform((e) => e.toLowerCase()).optional(),
   password: password.optional().or(z.literal("").transform(() => undefined)),
-  role: z.enum(["HEAD", "MANAGER", "ASSOCIATE_DESIGNER", "TEAM_MEMBER"]).optional(),
+  role: z.enum(["HEAD", "MANAGER", "ASSOCIATE_DESIGNER", "MID_DESIGNER"]).optional(),
   jobTitle: z.string().trim().max(80).optional().nullable(),
   managerId: id.optional().nullable(),
   isActive: z.boolean().optional(),
@@ -105,3 +105,22 @@ export const suggestionInput = z.object({
 
 export const replyInput = z.object({ message: text(4000, "Reply") });
 export const suggestionStatusInput = z.object({ status: z.enum(SUGGESTION_STATUSES) });
+
+export const passwordChangeInput = z
+  .object({
+    currentPassword: z.string().min(1, "Enter your current password"),
+    newPassword: password,
+  })
+  .refine((v) => v.newPassword !== v.currentPassword, { message: "Pick a password different from the current one", path: ["newPassword"] });
+
+export const notificationReadInput = z.union([z.object({ all: z.literal(true) }), z.object({ ids: z.array(id).min(1).max(200) })]);
+
+export const pushSubscriptionInput = z.object({
+  endpoint: z.url().max(2000),
+  keys: z.object({ p256dh: z.string().min(1).max(500), auth: z.string().min(1).max(500) }),
+});
+export const pushUnsubscribeInput = z.object({ endpoint: z.string().max(2000) });
+
+export const projectReviewInput = z
+  .object({ decision: z.enum(["APPROVE", "REJECT"]), note: z.string().trim().max(1000).optional() })
+  .refine((v) => v.decision === "APPROVE" || !!v.note, { message: "Add a reason so the manager knows what to change", path: ["note"] });

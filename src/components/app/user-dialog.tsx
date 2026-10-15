@@ -26,7 +26,7 @@ export type EditableUser = {
 /**
  * Add / edit a person.
  *  - mode "head": any role, any team, activate/deactivate, reset password
- *  - mode "manager": Associate Designer / Team Member in your own team only
+ *  - mode "manager": add Mid / Associate Designers to your own team (role changes are Head-only)
  */
 export function UserDialog({
   mode,
@@ -58,15 +58,18 @@ export function UserDialog({
   const [v, setV] = useState(blank);
   const set = <K extends keyof ReturnType<typeof blank>>(k: K, val: ReturnType<typeof blank>[K]) => setV((s) => ({ ...s, [k]: val }));
   const editing = !!user;
-  const designer = v.role === "ASSOCIATE_DESIGNER" || v.role === "TEAM_MEMBER";
-  const roles: Role[] = mode === "head" ? (isSelf ? ["HEAD"] : ["MANAGER", "ASSOCIATE_DESIGNER", "TEAM_MEMBER"]) : ["ASSOCIATE_DESIGNER", "TEAM_MEMBER"];
+  const designer = v.role === "ASSOCIATE_DESIGNER" || v.role === "MID_DESIGNER";
+  const roles: Role[] = mode === "head" ? (isSelf ? ["HEAD"] : ["MANAGER", "MID_DESIGNER", "ASSOCIATE_DESIGNER"]) : ["MID_DESIGNER", "ASSOCIATE_DESIGNER"];
+  // Once someone exists, only the Design Head changes their role.
+  const roleLocked = isSelf || (mode === "manager" && editing);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSaving(true);
     try {
-      const body: Record<string, unknown> = { name: v.name, email: v.email, role: v.role, jobTitle: v.jobTitle || null };
+      const body: Record<string, unknown> = { name: v.name, email: v.email, jobTitle: v.jobTitle || null };
+      if (!roleLocked) body.role = v.role;
       if (mode === "head") {
         body.managerId = designer ? v.managerId : null;
         if (editing) body.isActive = v.isActive;
@@ -91,7 +94,7 @@ export function UserDialog({
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${user.name}` : mode === "manager" ? "Add to your team" : "Add user"}</DialogTitle>
           <DialogDescription>
-            {mode === "manager" ? "Associate Designers and Team Members have the same permissions; only the role label differs." : "Design Managers own a team. Associate Designers and Team Members report to one manager."}
+            {mode === "manager" ? (editing ? "Only the Design Head can change someone's role." : "Mid Designers and Associate Designers have the same permissions; only the role label differs.") : "Design Managers own a team. Associate Designers and Mid Designers report to one manager."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-4">
@@ -106,7 +109,7 @@ export function UserDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label htmlFor="u-role">Role</Label>
-              <NativeSelect id="u-role" value={v.role} onChange={(e) => set("role", e.target.value as Role)} disabled={isSelf}>
+              <NativeSelect id="u-role" value={v.role} onChange={(e) => set("role", e.target.value as Role)} disabled={roleLocked}>
                 {roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
               </NativeSelect>
             </div>

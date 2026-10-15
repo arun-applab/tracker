@@ -28,8 +28,22 @@ export type ProjectFormValues = {
 
 export type ManagerOption = { id: string; name: string; jobTitle: string | null; teamSize: number };
 
-/** Design Head: create / edit a project and assign Design Managers. */
-export function ProjectForm({ projectId, initial, managers }: { projectId?: string; initial: ProjectFormValues; managers: ManagerOption[] }) {
+/**
+ * Design Head: create / edit a project and assign Design Managers.
+ * Design Manager ("request" mode): the project goes to the Head for approval; the requesting
+ * manager is always on it and can add co-managers.
+ */
+export function ProjectForm({
+  projectId,
+  initial,
+  managers,
+  request,
+}: {
+  projectId?: string;
+  initial: ProjectFormValues;
+  managers: ManagerOption[];
+  request?: { selfId: string; approval?: "PENDING" | "REJECTED" };
+}) {
   const router = useRouter();
   const [v, setV] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -44,7 +58,17 @@ export function ProjectForm({ projectId, initial, managers }: { projectId?: stri
     setSaving(true);
     try {
       const res = projectId ? await api<{ id: string }>("PATCH", `/api/projects/${projectId}`, v) : await api<{ id: string }>("POST", "/api/projects", v);
-      toast.success(projectId ? "Project updated" : "Project created");
+      toast.success(
+        request
+          ? !projectId
+            ? "Sent to the Design Head for approval"
+            : request.approval === "REJECTED"
+              ? "Resubmitted for approval"
+              : "Request updated"
+          : projectId
+            ? "Project updated"
+            : "Project created",
+      );
       router.push(`/projects/${res.id}`);
       router.refresh();
     } catch (err) {
@@ -98,25 +122,31 @@ export function ProjectForm({ projectId, initial, managers }: { projectId?: stri
       </section>
 
       <section className="panel pb-6">
-        <PanelHeader title="Assign Design Managers" description="Each manager then onboards people from their own team." />
+        <PanelHeader
+          title={request ? "Design Managers" : "Assign Design Managers"}
+          description={request ? "You're on this project. Add co-managers if another team leads part of it." : "Each manager then onboards people from their own team."}
+        />
         <div className="grid gap-2 px-6 pt-5">
           {managers.length === 0 && <p className="text-sm text-muted-foreground">No active Design Managers yet.</p>}
           {managers.map((m) => {
-            const on = v.managerIds.includes(m.id);
+            const locked = request?.selfId === m.id;
+            const on = locked || v.managerIds.includes(m.id);
             return (
               <button
                 type="button"
                 key={m.id}
                 aria-pressed={on}
+                disabled={locked}
+                title={locked ? "You're always on your own request" : undefined}
                 onClick={() => set("managerIds", on ? v.managerIds.filter((x) => x !== m.id) : [...v.managerIds, m.id])}
                 className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-[20px] px-3 py-2.5 text-left transition",
+                  "flex cursor-pointer items-center gap-3 rounded-[20px] px-3 py-2.5 text-left transition disabled:cursor-default",
                   on ? "bg-ink text-white shadow-md" : "bg-white/80 hover:bg-white",
                 )}
               >
                 <Avatar name={m.name} className="size-9" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{m.name}</span>
+                  <span className="block truncate text-sm font-medium">{m.name}{locked && " (you)"}</span>
                   <span className={cn("block truncate text-xs", on ? "text-white/60" : "text-muted-foreground")}>
                     {m.jobTitle ?? "Design Manager"} · {m.teamSize} in team
                   </span>
@@ -136,11 +166,24 @@ export function ProjectForm({ projectId, initial, managers }: { projectId?: stri
       </section>
 
       <div className="flex flex-col-reverse items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end lg:col-span-2">
+        {request && !error && (
+          <p className="mr-auto text-sm text-muted-foreground">
+            The Design Head reviews requests. Once approved you can onboard designers and they can log time.
+          </p>
+        )}
         {error && <p className="mr-auto rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">{error}</p>}
         <Button type="button" variant="outline" onClick={() => router.back()}>Cancel</Button>
         <Button type="submit" disabled={saving}>
           {saving && <Loader2 className="animate-spin" />}
-          {projectId ? "Save changes" : "Create project"}
+          {request
+            ? !projectId
+              ? "Send for approval"
+              : request.approval === "REJECTED"
+                ? "Resubmit for approval"
+                : "Save request"
+            : projectId
+              ? "Save changes"
+              : "Create project"}
         </Button>
       </div>
     </form>

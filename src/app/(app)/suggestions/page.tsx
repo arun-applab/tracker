@@ -20,16 +20,17 @@ import { formatDateTime } from "@/lib/server-time";
 import { cn } from "@/lib/utils";
 import { requireActor } from "@/server/actor";
 import { isHead } from "@/server/permissions";
-import { listSuggestions } from "@/server/services/suggestions";
+import { isSuggestionSort, listSuggestions, SUGGESTION_SORTS } from "@/server/services/suggestions";
 
 export const metadata = { title: "Suggestions" };
 
-export default async function SuggestionsPage({ searchParams }: { searchParams: Promise<{ status?: string; category?: string }> }) {
+export default async function SuggestionsPage({ searchParams }: { searchParams: Promise<{ status?: string; category?: string; sort?: string }> }) {
   const actor = await requireActor(["HEAD", "MANAGER"]);
   const sp = await searchParams;
   const status = SUGGESTION_STATUSES.includes(sp.status as SuggestionStatus) ? (sp.status as SuggestionStatus) : undefined;
   const category = SUGGESTION_CATEGORIES.includes(sp.category as SuggestionCategory) ? (sp.category as SuggestionCategory) : undefined;
-  const items = await listSuggestions(actor, { status, category });
+  const sort = isSuggestionSort(sp.sort) ? sp.sort : "activity";
+  const items = await listSuggestions(actor, { status, category, sort });
   const head = isHead(actor);
   const unread = items.filter((i) => i.unread).length;
 
@@ -55,7 +56,10 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
           <option value="">All categories</option>
           {SUGGESTION_CATEGORIES.map((c) => <option key={c} value={c}>{SUGGESTION_CATEGORY_LABEL[c]}</option>)}
         </NativeSelect>
-        {(status || category) && <Button variant="ghost" size="sm" asChild><Link href="/suggestions">Clear</Link></Button>}
+        <NativeSelect name="sort" defaultValue={sort} className="w-44" aria-label="Sort">
+          {Object.entries(SUGGESTION_SORTS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </NativeSelect>
+        {(status || category || sp.sort) && <Button variant="ghost" size="sm" asChild><Link href="/suggestions">Clear</Link></Button>}
       </AutoSubmitForm>
 
       {items.length === 0 ? (

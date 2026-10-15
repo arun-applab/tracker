@@ -19,7 +19,14 @@ enum Role {
   HEAD
   MANAGER
   ASSOCIATE_DESIGNER
-  TEAM_MEMBER
+  MID_DESIGNER
+}
+
+// Projects created by a Design Manager wait for the Design Head's approval.
+enum ProjectApproval {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum ProjectStatus {
@@ -107,6 +114,10 @@ model User {
   suggestions       Suggestion[]
   suggestionReplies SuggestionReply[]
   suggestionReads   SuggestionRead[]
+  reviewedProjects  Project[]             @relation("ProjectReviewer")
+  notifications     Notification[]        @relation("NotificationUser")
+  notificationsSent Notification[]        @relation("NotificationActor")
+  pushSubscriptions PushSubscription[]
 
   @@index([managerId])
   @@index([role])
@@ -145,6 +156,14 @@ model Project {
   createdById String
   createdBy   User   @relation("ProjectCreator", fields: [createdById], references: [id])
 
+  // Approval (Design Manager requests). Projects the Head creates are APPROVED straight away.
+  approval     ProjectApproval @default(APPROVED)
+  approvalNote String? // the Head's reason when rejecting
+  submittedAt  DateTime?
+  reviewedById String?
+  reviewedBy   User?           @relation("ProjectReviewer", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -155,6 +174,7 @@ model Project {
   timeLogs      TimeLog[]
 
   @@index([status])
+  @@index([approval])
 }
 
 model ProjectManager {
@@ -291,4 +311,36 @@ model SuggestionRead {
   lastReadAt   DateTime
 
   @@id([userId, suggestionId])
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation("NotificationUser", fields: [userId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?     @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type      String // e.g. project_request, project_approved, onboarded, comment
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+// Browser push subscriptions (one per browser/device).
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }

@@ -1,18 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CalendarClock, CalendarDays, Clock, Pencil, Plus, UserPlus, Users } from "lucide-react";
+import { ArrowLeft, CalendarClock, CalendarDays, CircleX, Clock, Hourglass, Pencil, Plus, UserPlus, Users } from "lucide-react";
 import { AutoSubmitForm } from "@/components/app/auto-submit-form";
-import { BorrowedTag, OverdueBadge, PriorityBadge, ProjectStatusBadge, RoleBadge } from "@/components/app/badges";
+import { ApprovalBadge, BorrowedTag, OverdueBadge, PriorityBadge, ProjectStatusBadge, RoleBadge } from "@/components/app/badges";
 import { EmptyState } from "@/components/app/empty-state";
 import { LogTable } from "@/components/app/log-table";
 import { PanelHeader } from "@/components/app/page-header";
 import { FigmaLinks, OnboardDialog, StatusSelect } from "@/components/app/project-actions";
+import { ProjectReviewActions } from "@/components/app/project-review";
 import { TimeLogDialog } from "@/components/app/time-log-dialog";
 import { Avatar, AvatarStack } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTable } from "@/components/app/sortable-table";
 import { PROJECT_STATUS, ROLE_LABEL } from "@/lib/constants";
 import { addDays, formatDate, formatHours, isValidIso } from "@/lib/dates";
 import { AppError } from "@/lib/errors";
@@ -35,7 +36,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
     from: sp.from === "all" ? undefined : sp.from && isValidIso(sp.from) ? sp.from : addDays(todayIso(), -29),
     to: sp.to && isValidIso(sp.to) ? sp.to : undefined,
     userId: sp.person || undefined,
-    role: sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "TEAM_MEMBER" ? sp.role : undefined,
+    role: sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "MID_DESIGNER" ? sp.role : undefined,
   } as const;
 
   let data;
@@ -49,7 +50,8 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
   const [logOptions, onboardable] = await Promise.all([getLogFormOptions(actor), can.onboard ? getOnboardablePeople(actor, project.id, access) : Promise.resolve([])]);
   const rows = logs.map((l) => toLogRow(actor, l));
   const iManage = isProjectManager(actor, access);
-  const canSelfLog = !isHead(actor) && !isClosed(project.status) && (iManage || access.memberIds.includes(actor.id));
+  const approved = project.approval === "APPROVED";
+  const canSelfLog = approved && !isHead(actor) && !isClosed(project.status) && (iManage || access.memberIds.includes(actor.id));
   const filtered = !!((sp.from && sp.from !== "all") || filters.to || filters.userId || filters.role);
   const hoursOf = (uid: string) => perPerson.find((p) => p.id === uid)?.hours ?? 0;
   const everyone = [...project.managers.map((m) => m.manager), ...project.assignments.map((a) => a.user)];
@@ -76,6 +78,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
             <span>{project.client}</span>
             <span aria-hidden>·</span>
             <PriorityBadge priority={project.priority} />
+            <ApprovalBadge approval={project.approval} />
             {overdue && <OverdueBadge />}
           </div>
         </div>
@@ -84,12 +87,12 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
             <div className="mr-1 rounded-full bg-white/70 p-1.5 pr-3 shadow-sm">
               <div className="flex items-center gap-2">
                 <AvatarStack people={everyone} max={7} size="size-9" />
-                <span className="text-xs text-muted-foreground">{everyone.length} people</span>
+                <span className="text-xs text-muted-foreground">{everyone.length} {everyone.length === 1 ? "person" : "people"}</span>
               </div>
             </div>
           )}
           {can.changeStatus ? <StatusSelect projectId={project.id} status={project.status} /> : <ProjectStatusBadge status={project.status} className="h-10 px-4 text-sm" />}
-          {can.editDetails && (
+          {can.editDetails && approved && (
             <Link href={`/projects/${project.id}/edit`} className="icon-btn size-10" title="Edit project & managers" aria-label="Edit project">
               <Pencil />
             </Link>
@@ -101,6 +104,53 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
           )}
         </div>
       </div>
+
+      {/* Approval (projects requested by a Design Manager) */}
+      {!approved && (
+        <section
+          className={cn(
+            "mb-6 flex flex-col gap-4 rounded-[28px] border px-6 py-5 md:flex-row md:items-center md:justify-between",
+            project.approval === "PENDING" ? "border-amber-200 bg-amber-50/90" : "border-[#f3c4c4] bg-[#fde2e1]/80",
+          )}
+        >
+          <div className="flex items-start gap-3">
+            <span className={cn("mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-full", project.approval === "PENDING" ? "bg-amber-200/70 text-amber-900" : "bg-white/80 text-[#b23b3b]")}>
+              {project.approval === "PENDING" ? <Hourglass className="size-5" /> : <CircleX className="size-5" />}
+            </span>
+            <div>
+              <p className="font-semibold">
+                {project.approval === "PENDING"
+                  ? can.review
+                    ? `${project.createdBy.name} requested this project`
+                    : "Waiting for the Design Head's approval"
+                  : `Declined by ${project.reviewedBy?.name ?? "the Design Head"}`}
+              </p>
+              <p className="mt-0.5 text-sm text-foreground/75">
+                {project.approval === "PENDING"
+                  ? can.review
+                    ? `Sent ${formatDateTime(project.submittedAt ?? project.createdAt)}. Once you approve it, the managers can onboard designers and time can be logged.`
+                    : "Designers can be onboarded and time logged once it's approved. You'll get a notification."
+                  : project.approvalNote
+                    ? `“${project.approvalNote}”`
+                    : "No reason given."}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {can.review && <ProjectReviewActions projectId={project.id} projectName={project.name} />}
+            {can.editDetails && !can.review && (
+              <Button asChild variant={project.approval === "REJECTED" ? "default" : "outline"}>
+                <Link href={`/projects/${project.id}/edit`}><Pencil />{project.approval === "REJECTED" ? "Edit & resubmit" : "Edit request"}</Link>
+              </Button>
+            )}
+            {can.review && (
+              <Button asChild variant="ghost">
+                <Link href={`/projects/${project.id}/edit`}><Pencil />Edit</Link>
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Key facts */}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -127,7 +177,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
           </div>
         )}
         <div className="panel p-5">
-          <p className="flex items-center gap-1.5 text-sm text-muted-foreground"><Users className="size-4" />Created by</p>
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground"><Users className="size-4" />{project.submittedAt ? "Requested by" : "Created by"}</p>
           <p className="mt-2 truncate text-xl font-semibold">{project.createdBy.name}</p>
         </div>
       </div>
@@ -145,7 +195,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
       <section className="panel mb-6 pb-6">
         <PanelHeader
           title="Project team"
-          description={teams.length ? `${teams.length} ${teams.length === 1 ? "team" : "teams"} assigned by the Design Head · managers can borrow people from other teams` : undefined}
+          description={teams.length ? `${teams.length} ${teams.length === 1 ? "team" : "teams"} on this project · managers can borrow people from other teams` : undefined}
           actions={
             can.onboard && (
               <OnboardDialog
@@ -166,7 +216,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
               icon={Users}
               title="No Design Manager assigned yet"
               description={can.editDetails ? "Edit the project to assign one or more Design Managers." : "The Design Head will assign a manager."}
-              action={can.editDetails ? <Button asChild><Link href={`/projects/${project.id}/edit`}>Assign managers</Link></Button> : undefined}
+              action={can.editDetails && approved ? <Button asChild><Link href={`/projects/${project.id}/edit`}>Assign managers</Link></Button> : undefined}
             />
           ) : (
             <div className="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -190,7 +240,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
                         )}
                       </div>
                       <ul className="mt-2 space-y-1">
-                        {t.members.length === 0 && <li className="px-1 py-3 text-sm text-muted-foreground">{mine ? "Onboard people from your team." : "No one onboarded yet."}</li>}
+                        {t.members.length === 0 && <li className="px-1 py-3 text-sm text-muted-foreground">{!approved ? "Onboarding opens once the Design Head approves the project." : mine ? "Onboard people from your team." : "No one onboarded yet."}</li>}
                         {t.members.map((m) => (
                           <li key={m.id} className="flex items-center gap-3 rounded-2xl px-1 py-1.5">
                             <Avatar name={m.name} className="size-9 text-[11px]" />
@@ -226,33 +276,33 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
               {perPerson.length === 0 ? (
                 <div className="px-3 pb-2"><EmptyState icon={Clock} title="No hours logged yet" /></div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="pl-3">Person</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Team</TableHead>
-                      <TableHead className="pr-3 text-right">Hours</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {[...perPerson].sort((a, b) => b.hours - a.hours).map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="pl-3">
-                          <div className="flex items-center gap-2.5">
-                            <Avatar name={p.name} className="size-8 text-[10px]" />
-                            <span className="font-medium">{p.name}</span>
-                            {!p.assigned && <span className="text-xs text-muted-foreground">(no longer on project)</span>}
-                            {p.borrowed && p.homeManagerName && <BorrowedTag managerName={p.homeManagerName} short />}
-                          </div>
-                        </TableCell>
-                        <TableCell><RoleBadge role={p.role} /></TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{teams.find((t) => t.manager.id === p.teamManagerId)?.manager.name.split(" ")[0] ?? "—"}</TableCell>
-                        <TableCell className="pr-3 text-right text-[15px] font-semibold tabular">{formatHours(p.hours)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <SortableTable
+                  defaultSort={{ col: 3, dir: "desc" }}
+                  columns={[
+                    { label: "Person", className: "pl-3", cellClassName: "pl-3" },
+                    { label: "Role" },
+                    { label: "Team", cellClassName: "text-sm text-muted-foreground" },
+                    { label: "Hours", className: "pr-3 text-right", cellClassName: "pr-3 text-right text-[15px] font-semibold tabular" },
+                  ]}
+                  rows={perPerson.map((p) => {
+                    const team = teams.find((t) => t.manager.id === p.teamManagerId)?.manager.name.split(" ")[0] ?? null;
+                    return {
+                      id: p.id,
+                      sort: [p.name, ROLE_LABEL[p.role], team, p.hours],
+                      cells: [
+                        <div key="n" className="flex items-center gap-2.5">
+                          <Avatar name={p.name} className="size-8 text-[10px]" />
+                          <span className="font-medium">{p.name}</span>
+                          {!p.assigned && <span className="text-xs text-muted-foreground">(no longer on project)</span>}
+                          {p.borrowed && p.homeManagerName && <BorrowedTag managerName={p.homeManagerName} short />}
+                        </div>,
+                        <RoleBadge key="r" role={p.role} />,
+                        team ?? "—",
+                        formatHours(p.hours),
+                      ],
+                    };
+                  })}
+                />
               )}
             </div>
           </section>
@@ -317,8 +367,8 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
                 <NativeSelect name="role" defaultValue={filters.role ?? ""} className="lg:w-52">
                   <option value="">All roles</option>
                   <option value="MANAGER">{ROLE_LABEL.MANAGER}</option>
+                  <option value="MID_DESIGNER">{ROLE_LABEL.MID_DESIGNER}</option>
                   <option value="ASSOCIATE_DESIGNER">{ROLE_LABEL.ASSOCIATE_DESIGNER}</option>
-                  <option value="TEAM_MEMBER">{ROLE_LABEL.TEAM_MEMBER}</option>
                 </NativeSelect>
               </label>
             )}

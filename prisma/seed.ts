@@ -261,7 +261,7 @@ async function main() {
   await db.user.deleteMany();
 
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, 10);
-  const roleFor = (title: string): Role => (title.toLowerCase().startsWith("associate") ? "ASSOCIATE_DESIGNER" : "TEAM_MEMBER");
+  const roleFor = (title: string): Role => (title.toLowerCase().startsWith("associate") ? "ASSOCIATE_DESIGNER" : "MID_DESIGNER");
 
   const users = new Map<string, { id: string; name: string; role: Role; managerKey: string | null; title: string }>();
   const head = await db.user.create({ data: { name: HEAD.name, email: HEAD.email, role: "HEAD", jobTitle: HEAD.title, passwordHash } });
@@ -458,6 +458,41 @@ async function main() {
     if (s.headRead) {
       const headMsgs = replies.filter((r) => r.authorId === head.id).map((r) => r.createdAt);
       await db.suggestionRead.create({ data: { userId: head.id, suggestionId: sug.id, lastReadAt: headMsgs.at(-1) ?? lastActivityAt } });
+    }
+  }
+
+  // Project requests from Design Managers: one waiting for the Head, one declined.
+  const requests = [
+    {
+      by: "sanya", name: "Loyalty App Discovery", client: "Applab Internal", priority: "MEDIUM" as Priority, daysAgo: 1, approval: "PENDING" as const, note: null,
+      description: "Two-week discovery for a loyalty programme app: stakeholder interviews, competitor review and a first journey map.",
+    },
+    {
+      by: "arun", name: "Annual Report Microsite", client: "Applab Marketing", priority: "LOW" as Priority, daysAgo: 6, approval: "REJECTED" as const,
+      note: "Marketing hasn't confirmed the budget yet. Add the agreed scope and resubmit once they sign off.",
+      description: "Interactive microsite for the annual report with animated data stories.",
+    },
+  ];
+  for (const r of requests) {
+    const submittedAt = at(d(-r.daysAgo), 10);
+    const p = await db.project.create({
+      data: {
+        name: r.name, client: r.client, description: r.description, priority: r.priority, status: "NOT_STARTED",
+        startDate: d(7), eta: d(40), createdById: U(r.by).id, createdAt: submittedAt, submittedAt,
+        approval: r.approval, approvalNote: r.note,
+        ...(r.approval === "REJECTED" ? { reviewedById: head.id, reviewedAt: at(d(-r.daysAgo + 1), 9) } : {}),
+        statusChanges: { create: { fromStatus: null, toStatus: "NOT_STARTED", changedById: U(r.by).id, changedAt: submittedAt } },
+        managers: { create: { managerId: U(r.by).id, assignedById: U(r.by).id, assignedAt: submittedAt } },
+      },
+    });
+    if (r.approval === "PENDING") {
+      await db.notification.create({
+        data: { userId: head.id, actorId: U(r.by).id, type: "project_request", title: "New project request", body: `${U(r.by).name} requested “${r.name}” for ${r.client}. Review it to approve or decline.`, link: `/projects/${p.id}`, createdAt: submittedAt },
+      });
+    } else {
+      await db.notification.create({
+        data: { userId: U(r.by).id, actorId: head.id, type: "project_rejected", title: "Project request declined", body: `${head.name} declined “${r.name}”: ${r.note} Edit the project to resubmit it.`, link: `/projects/${p.id}`, createdAt: at(d(-r.daysAgo + 1), 9) },
+      });
     }
   }
 

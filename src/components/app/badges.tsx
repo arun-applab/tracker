@@ -1,9 +1,10 @@
-import { AlertTriangle, ArrowLeftRight, Hand, User } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, CircleX, Hand, Hourglass, User } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   AVAILABILITY,
   PRIORITY,
+  PROJECT_APPROVAL,
   PROJECT_STATUS,
   ROLE_LABEL,
   SUGGESTION_STATUS,
@@ -81,6 +82,18 @@ export function BorrowedTag({ managerName, short }: { managerName: string; short
     <Badge variant="custom" className="bg-[#d9f0f5] text-[#1d6f84] ring-transparent" title={`Borrowed from ${managerName}'s team`}>
       <ArrowLeftRight />
       {short ? "Borrowed" : `Borrowed from ${managerName.split(" ")[0]}'s team`}
+    </Badge>
+  );
+}
+
+/** Shown only for projects that aren't approved yet (or were declined). */
+export function ApprovalBadge({ approval, className }: { approval: keyof typeof PROJECT_APPROVAL; className?: string }) {
+  if (approval === "APPROVED") return null;
+  const Icon = approval === "PENDING" ? Hourglass : CircleX;
+  return (
+    <Badge variant="custom" className={cn(PROJECT_APPROVAL[approval].badge, className)}>
+      <Icon />
+      {PROJECT_APPROVAL[approval].label}
     </Badge>
   );
 }

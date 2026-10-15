@@ -3,12 +3,14 @@ import { db } from "@/lib/db";
 import { requireActor } from "@/server/actor";
 import { getLogFormOptions } from "@/server/form-options";
 import { getMyAvailability } from "@/server/services/availability";
+import { listNotifications } from "@/server/services/notifications";
 import { countUnreadSuggestions } from "@/server/services/suggestions";
+import { vapidPublicKey } from "@/server/push";
 import { listOpenThreads } from "@/server/services/timelogs";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const actor = await requireActor();
-  const [suggestions, me, logOptions, myStatus, threads] = await Promise.all([
+  const [suggestions, me, logOptions, myStatus, threads, notifications] = await Promise.all([
     countUnreadSuggestions(actor),
     db.user.findUnique({
       where: { id: actor.id },
@@ -17,6 +19,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     getLogFormOptions(actor),
     getMyAvailability(actor),
     listOpenThreads(actor),
+    listNotifications(actor),
   ]);
   return (
     <AppShell
@@ -31,7 +34,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       badges={{ suggestions }}
       logOptions={logOptions}
       myStatus={myStatus ? { status: myStatus.status, autoStatus: myStatus.autoStatus, overridden: myStatus.overridden } : null}
-      threads={threads}
+      notifications={{ ...notifications, threads }}
+      vapidPublicKey={vapidPublicKey()}
     >
       {children}
     </AppShell>

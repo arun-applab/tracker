@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import { signOut } from "next-auth/react";
-import { ArrowLeft, CalendarCheck2, Clock, FolderKanban, Layers, LogOut, MessageSquareText, Plus } from "lucide-react";
+import { ArrowLeft, CalendarCheck2, Clock, FolderKanban, KeyRound, Layers, LogOut, MessageSquareText, Plus } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -13,7 +14,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { InboxBell } from "@/components/app/inbox-bell";
+import { ChangePasswordDialog } from "@/components/app/change-password-dialog";
+import { NotificationBell } from "@/components/app/notification-bell";
 import { StatusSwitch } from "@/components/app/status-switch";
 import { TimeLogDialog } from "@/components/app/time-log-dialog";
 import type { LogFormOptions } from "@/components/app/log-types";
@@ -23,7 +25,7 @@ import { cn } from "@/lib/utils";
 type NavItem = { href: string; label: string; badge?: number };
 
 function navFor(role: Role, badges: { suggestions: number }): NavItem[] {
-  if (role === "ASSOCIATE_DESIGNER" || role === "TEAM_MEMBER") {
+  if (role === "ASSOCIATE_DESIGNER" || role === "MID_DESIGNER") {
     return [
       { href: "/", label: "Dashboard" },
       { href: "/projects", label: "My Projects" },
@@ -108,20 +110,23 @@ export function AppShell({
   badges,
   logOptions,
   myStatus,
-  threads,
+  notifications,
+  vapidPublicKey,
   children,
 }: {
   user: { id: string; name: string; email: string; role: Role; teamLabel?: string | null; skills: string[] };
   badges: { suggestions: number };
   logOptions?: LogFormOptions;
   myStatus: { status: AvailabilityStatus; autoStatus: AvailabilityStatus; overridden: boolean } | null;
-  threads: Parameters<typeof InboxBell>[0]["threads"];
+  notifications: Parameters<typeof NotificationBell>[0]["initial"];
+  vapidPublicKey: string | null;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const items = navFor(user.role, badges);
   const leader = user.role === "HEAD" || user.role === "MANAGER";
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   return (
     <div className="min-h-dvh">
@@ -134,7 +139,7 @@ export function AppShell({
           </div>
           <div className="flex items-center gap-2">
             {myStatus && <StatusSwitch userId={user.id} {...myStatus} />}
-            <InboxBell threads={threads} />
+            <NotificationBell initial={notifications} vapidPublicKey={vapidPublicKey} />
             <DropdownMenu>
               <DropdownMenuTrigger className="cursor-pointer rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="Account menu">
                 <Avatar name={user.name} className="size-11 text-sm shadow-sm" />
@@ -156,6 +161,10 @@ export function AppShell({
                   )}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
+                  <KeyRound />
+                  Change password
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => signOut({ callbackUrl: "/login" })}>
                   <LogOut />
                   Sign out
@@ -212,6 +221,8 @@ export function AppShell({
           <LogOut />
         </button>
       </aside>
+
+      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
 
       <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:pl-24 lg:pr-8">{children}</main>
     </div>

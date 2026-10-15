@@ -11,14 +11,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTable } from "@/components/app/sortable-table";
+import { formatDate } from "@/lib/dates";
 import { ROLE_LABEL, type Role } from "@/lib/constants";
 import { requireActor } from "@/server/actor";
 import { listManagers, listSkills, listUsers } from "@/server/services/users";
 
 export const metadata = { title: "Users & skills" };
 
-const ROLES: Role[] = ["HEAD", "MANAGER", "ASSOCIATE_DESIGNER", "TEAM_MEMBER"];
+const ROLES: Role[] = ["HEAD", "MANAGER", "MID_DESIGNER", "ASSOCIATE_DESIGNER"];
 
 export default async function UsersPage({ searchParams }: { searchParams: Promise<{ q?: string; role?: string; team?: string; inactive?: string; skill?: string }> }) {
   const actor = await requireActor(["HEAD"]);
@@ -38,7 +39,7 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
         (sp.inactive === "1" || u.isActive),
     );
   const filtered = !!(q || role || sp.team || sp.inactive || sp.skill);
-  const order: Record<Role, number> = { HEAD: 0, MANAGER: 1, ASSOCIATE_DESIGNER: 2, TEAM_MEMBER: 3 };
+  const order: Record<Role, number> = { HEAD: 0, MANAGER: 1, MID_DESIGNER: 2, ASSOCIATE_DESIGNER: 3 };
   rows.sort((a, b) => order[a.role] - order[b.role] || (a.manager?.name ?? "").localeCompare(b.manager?.name ?? "") || a.name.localeCompare(b.name));
 
   return (
@@ -77,51 +78,48 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
         <EmptyState icon={Users} title="No users match these filters" />
       ) : (
         <section className="panel overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-6">Name</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Team</TableHead>
-                <TableHead>Skills</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="pr-6 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((u) => (
-                <TableRow key={u.id} className={u.isActive ? undefined : "opacity-60"}>
-                  <TableCell className="pl-6">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={u.name} className="size-9 text-[11px]" />
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{u.name}</div>
-                        <div className="truncate text-xs text-muted-foreground">{u.jobTitle ? `${u.jobTitle} · ` : ""}{u.email}</div>
-                      </div>
+          <SortableTable
+            defaultSort={{ col: 1, dir: "asc" }}
+            columns={[
+              { label: "Name", className: "pl-6", cellClassName: "pl-6" },
+              { label: "Role" },
+              { label: "Team", cellClassName: "whitespace-nowrap text-sm text-muted-foreground" },
+              { label: "Skills", cellClassName: "min-w-52" },
+              { label: "Status" },
+              { label: "Added", firstDir: "desc", cellClassName: "whitespace-nowrap text-sm text-muted-foreground tabular" },
+              { label: "Actions", sortable: false, className: "pr-6 text-right", cellClassName: "pr-6 text-right" },
+            ]}
+            rows={rows.map((u) => {
+              const team = u.role === "MANAGER" ? "Leads a team" : u.role === "HEAD" ? "—" : u.manager ? `${u.manager.name}'s team` : "—";
+              return {
+                id: u.id,
+                className: u.isActive ? undefined : "opacity-60",
+                sort: [u.name, order[u.role], team === "—" ? null : team, u.skillList.length ? u.skillList.join(", ") : null, u.isActive ? 0 : 1, u.createdAt.toISOString(), null],
+                cells: [
+                  <div key="n" className="flex items-center gap-3">
+                    <Avatar name={u.name} className="size-9 text-[11px]" />
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">{u.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">{u.jobTitle ? `${u.jobTitle} · ` : ""}{u.email}</div>
                     </div>
-                  </TableCell>
-                  <TableCell><RoleBadge role={u.role} /></TableCell>
-                  <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                    {u.role === "MANAGER" ? "Leads a team" : u.role === "HEAD" ? "—" : u.manager ? `${u.manager.name}'s team` : "—"}
-                  </TableCell>
-                  <TableCell className="min-w-52"><SkillChips skills={u.skillList} max={4} /></TableCell>
-                  <TableCell>
-                    {u.isActive ? <Badge variant="custom" className="bg-[#dcf2e8] text-[#1f7a52] ring-transparent">Active</Badge> : <Badge variant="secondary">Inactive</Badge>}
-                  </TableCell>
-                  <TableCell className="pr-6 text-right">
-                    <div className="flex justify-end gap-1.5">
-                      <SkillsDialog userId={u.id} name={u.name} skills={u.skillList} catalog={skillNames}>
-                        <Button size="sm" variant="outline"><Sparkles />Skills</Button>
-                      </SkillsDialog>
-                      <UserDialog mode="head" user={u} managers={managers} isSelf={u.id === actor.id}>
-                        <button type="button" className="icon-btn size-8" aria-label={`Edit ${u.name}`}><Pencil /></button>
-                      </UserDialog>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                  </div>,
+                  <RoleBadge key="r" role={u.role} />,
+                  team,
+                  <SkillChips key="s" skills={u.skillList} max={4} />,
+                  u.isActive ? <Badge key="a" variant="custom" className="bg-[#dcf2e8] text-[#1f7a52] ring-transparent">Active</Badge> : <Badge key="a" variant="secondary">Inactive</Badge>,
+                  formatDate(u.createdAt),
+                  <div key="x" className="flex justify-end gap-1.5">
+                    <SkillsDialog userId={u.id} name={u.name} skills={u.skillList} catalog={skillNames}>
+                      <Button size="sm" variant="outline"><Sparkles />Skills</Button>
+                    </SkillsDialog>
+                    <UserDialog mode="head" user={u} managers={managers} isSelf={u.id === actor.id}>
+                      <button type="button" className="icon-btn size-8" aria-label={`Edit ${u.name}`}><Pencil /></button>
+                    </UserDialog>
+                  </div>,
+                ],
+              };
+            })}
+          />
         </section>
       )}
     </>

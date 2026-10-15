@@ -31,7 +31,7 @@ export default async function TimeLogsPage({ searchParams }: { searchParams: SP 
     to: sp.to && isValidIso(sp.to) ? sp.to : undefined,
     projectId: sp.project || undefined,
     userId: sp.person || undefined,
-    role: sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "TEAM_MEMBER" ? sp.role : undefined,
+    role: sp.role === "MANAGER" || sp.role === "ASSOCIATE_DESIGNER" || sp.role === "MID_DESIGNER" ? sp.role : undefined,
   } as const;
 
   const [{ logs, total, hours }, options, projects, people] = await Promise.all([
@@ -82,8 +82,8 @@ export default async function TimeLogsPage({ searchParams }: { searchParams: SP 
           <NativeSelect name="role" defaultValue={filters.role ?? ""} className="lg:w-52">
             <option value="">All roles</option>
             <option value="MANAGER">{ROLE_LABEL.MANAGER}</option>
+            <option value="MID_DESIGNER">{ROLE_LABEL.MID_DESIGNER}</option>
             <option value="ASSOCIATE_DESIGNER">{ROLE_LABEL.ASSOCIATE_DESIGNER}</option>
-            <option value="TEAM_MEMBER">{ROLE_LABEL.TEAM_MEMBER}</option>
           </NativeSelect>
         </label>
         <div className="flex gap-1">

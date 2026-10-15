@@ -17,8 +17,8 @@ function thisWeek() {
 
 export async function getHeadDashboard(actor: Actor) {
   const { today, from, to } = thisWeek();
-  const [projects, managers, weekLogs, newSuggestions, unreadSuggestions, threads, borrowing] = await Promise.all([
-    listProjects(actor),
+  const [allProjects, managers, weekLogs, newSuggestions, unreadSuggestions, threads, borrowing] = await Promise.all([
+    listProjects(actor, { sort: "eta_asc" }),
     db.user.findMany({
       where: { role: "MANAGER", isActive: true },
       select: { id: true, name: true, _count: { select: { reports: { where: { isActive: true } } } } },
@@ -31,6 +31,9 @@ export async function getHeadDashboard(actor: Actor) {
     getBorrowingSummary(from, to),
   ]);
 
+  // Requests waiting for approval (or declined) don't count as department work yet.
+  const projects = allProjects.filter((p) => p.approval === "APPROVED");
+  const pendingRequests = allProjects.filter((p) => p.approval === "PENDING").sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
   const statusBreakdown = PROJECT_STATUSES.map((s) => ({ status: s, count: projects.filter((p) => p.status === s).length }));
   const overdue = projects.filter((p) => p.overdue);
   // A team = the manager + their reports.
@@ -56,6 +59,7 @@ export async function getHeadDashboard(actor: Actor) {
     activeProjects: active.slice(0, 6),
     threads,
     borrowing,
+    pendingRequests,
   };
 }
 
@@ -63,7 +67,7 @@ export async function getManagerDashboard(actor: Actor) {
   const { today, from, to } = thisWeek();
   const nextWeek = addDays(today, 7);
   const [allMine, weekOnProjects, weekByTeam, myWeek, availability, threads, lentOut] = await Promise.all([
-    listProjects(actor),
+    listProjects(actor, { sort: "eta_asc" }),
     db.timeLog.aggregate({ where: { project: { managers: { some: { managerId: actor.id } } }, date: { gte: from, lte: to } }, _sum: { hours: true } }),
     db.timeLog.aggregate({ where: { OR: [{ userId: actor.id }, { user: { managerId: actor.id } }], date: { gte: from, lte: to } }, _sum: { hours: true } }),
     db.timeLog.aggregate({ where: { userId: actor.id, date: { gte: from, lte: to } }, _sum: { hours: true } }),
@@ -71,7 +75,8 @@ export async function getManagerDashboard(actor: Actor) {
     listOpenThreads(actor, 6),
     getLentOut(actor.id),
   ]);
-  const projects = allMine.filter((p) => p.iManage);
+  const projects = allMine.filter((p) => p.iManage && p.approval === "APPROVED");
+  const myRequests = allMine.filter((p) => p.approval !== "APPROVED" && p.createdBy.id === actor.id);
   const myTeam = availability.find((t) => t.manager.id === actor.id);
   return {
     today,
@@ -86,13 +91,14 @@ export async function getManagerDashboard(actor: Actor) {
     overdue: projects.filter((p) => p.overdue),
     threads,
     lentOut,
+    myRequests,
   };
 }
 
 export async function getDesignerDashboard(actor: Actor) {
   const { today, from, to } = thisWeek();
   const [projects, todayHours, weekHours, threads, recent] = await Promise.all([
-    listProjects(actor),
+    listProjects(actor, { sort: "eta_asc" }),
     db.timeLog.aggregate({ where: { userId: actor.id, date: toDbDate(today) }, _sum: { hours: true } }),
     db.timeLog.aggregate({ where: { userId: actor.id, date: { gte: from, lte: to } }, _sum: { hours: true } }),
     listOpenThreads(actor, 6),

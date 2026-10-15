@@ -2,7 +2,7 @@ import "server-only";
 import type { z } from "zod";
 import { db } from "@/lib/db";
 import { badRequest, forbidden, notFound } from "@/lib/errors";
-import { addDays, diffDays, formatDate, toDbDate, toIso, weekDays, weekStart } from "@/lib/dates";
+import { addDays, diffDays, formatDate, formatHours, toDbDate, toIso, weekDays, weekStart } from "@/lib/dates";
 import { todayIso } from "@/lib/server-time";
 import { BACKDATE_LIMIT_DAYS, MAX_HOURS_PER_DAY } from "@/lib/constants";
 import type { Prisma } from "@/generated/prisma/client";
@@ -21,6 +21,7 @@ import {
   logsOwnTime,
 } from "@/server/permissions";
 import type { logFilters, timeLogInput, timeLogUpdate } from "@/lib/validation";
+import { notify } from "@/server/notify";
 
 export const logInclude = {
   user: { select: { id: true, name: true, role: true, managerId: true } },
@@ -62,7 +63,7 @@ async function checkDailyCap(userId: string, date: string, hours: number, exclud
 async function loadProject(projectId: string) {
   const p = await db.project.findUnique({
     where: { id: projectId },
-    select: { id: true, status: true, managers: { select: { managerId: true } }, assignments: { select: { userId: true } } },
+    select: { id: true, name: true, status: true, approval: true, managers: { select: { managerId: true } }, assignments: { select: { userId: true } } },
   });
   if (!p) throw notFound("Project not found");
   return { ...p, access: accessOf(p) };
@@ -77,6 +78,7 @@ export async function createLog(actor: Actor, input: z.infer<typeof timeLogInput
   const targetId = input.userId ?? actor.id;
   const self = targetId === actor.id;
   const project = await loadProject(input.projectId);
+  if (project.approval !== "APPROVED") throw badRequest("Time can be logged once the Design Head approves this project.");
 
   if (self) {
     if (!logsOwnTime(actor)) throw forbidden("The Design Head doesn't log time.");
@@ -97,7 +99,7 @@ export async function createLog(actor: Actor, input: z.infer<typeof timeLogInput
   checkDate(input.date, { allowOldDates: !self && !!input.overrideBackdate });
   await checkDailyCap(targetId, input.date, input.hours);
 
-  return db.timeLog.create({
+  const log = await db.timeLog.create({
     data: {
       userId: targetId,
       projectId: project.id,
@@ -109,6 +111,16 @@ export async function createLog(actor: Actor, input: z.infer<typeof timeLogInput
     },
     select: { id: true },
   });
+  if (!self) {
+    await notify([targetId], {
+      type: "time_logged_for_you",
+      title: "Time logged for you",
+      body: `${actor.name} logged ${formatHours(input.hours)} for you on “${project.name}” (${formatDate(input.date)}).`,
+      link: "/timesheet",
+      actorId: actor.id,
+    });
+  }
+  return log;
 }
 
 async function loadLog(id: string) {
@@ -131,7 +143,9 @@ export async function updateLog(actor: Actor, id: string, input: z.infer<typeof 
     const project = await loadProject(input.projectId);
     const owner = await db.user.findUniqueOrThrow({ where: { id: log.userId }, select: { id: true, role: true } });
     if (!canSelfLogOn(owner, project)) throw badRequest("That person isn't on that project.");
-    if (managerEdit ? !isProjectManager(actor, project.access) : isClosed(project.status)) throw badRequest("You can't move this entry to that project.");
+    if (project.approval !== "APPROVED" || (managerEdit ? !isProjectManager(actor, project.access) : isClosed(project.status))) {
+      throw badRequest("You can't move this entry to that project.");
+    }
   }
   if (input.date !== toIso(log.date)) checkDate(input.date, { allowOldDates: managerEdit && !!input.overrideBackdate });
   else if (input.date > today) throw badRequest("You can't log time for a future date.");
@@ -184,6 +198,23 @@ export async function addLogComment(actor: Actor, id: string, message: string) {
   if (!canViewLog(actor, log)) throw notFound("Time entry not found");
   if (!canCommentLog(actor, log)) throw forbidden();
   await db.timeLogComment.create({ data: { timeLogId: id, authorId: actor.id, message } });
+
+  // Everyone in the thread hears about it; a designer's first question goes to the project's managers.
+  const [earlier, project] = await Promise.all([
+    db.timeLogComment.findMany({ where: { timeLogId: id }, select: { authorId: true }, distinct: ["authorId"] }),
+    db.project.findUnique({ where: { id: log.projectId }, select: { name: true } }),
+  ]);
+  const others = new Set([log.userId, ...earlier.map((c) => c.authorId)]);
+  others.delete(actor.id);
+  const recipients = others.size ? [...others] : log.project.managerIds;
+  const preview = message.length > 140 ? `${message.slice(0, 137)}…` : message;
+  await notify(recipients, {
+    type: "comment",
+    title: `New comment · ${project?.name ?? "time entry"}`,
+    body: `${actor.name}: ${preview}`,
+    link: `/?thread=${id}`,
+    actorId: actor.id,
+  });
   return { id };
 }
 
@@ -249,6 +280,7 @@ export async function getLoggableProjects(actor: Actor) {
   return db.project.findMany({
     where: {
       status: { notIn: ["COMPLETED", "CANCELLED"] },
+      approval: "APPROVED",
       OR: [{ assignments: { some: { userId: actor.id } } }, ...(isManager(actor) ? [{ managers: { some: { managerId: actor.id } } }] : [])],
     },
     select: { id: true, name: true, client: true, status: true },
@@ -276,7 +308,7 @@ export async function getTimesheetWeek(actor: Actor, anyDayInWeek: string) {
 export async function getManagerLoggingOptions(actor: Actor) {
   if (!isManager(actor)) return [];
   const projects = await db.project.findMany({
-    where: { managers: { some: { managerId: actor.id } } },
+    where: { managers: { some: { managerId: actor.id } }, approval: "APPROVED" },
     select: {
       id: true,
       name: true,

@@ -4,6 +4,7 @@
 import type {
   AvailabilityStatus,
   Priority,
+  ProjectApproval,
   ProjectStatus,
   Role,
   SuggestionCategory,
@@ -11,7 +12,7 @@ import type {
   TaskType,
 } from "@/generated/prisma/enums";
 
-export type { AvailabilityStatus, Priority, ProjectStatus, Role, SuggestionCategory, SuggestionStatus, TaskType };
+export type { AvailabilityStatus, Priority, ProjectApproval, ProjectStatus, Role, SuggestionCategory, SuggestionStatus, TaskType };
 
 type Meta = { label: string; badge: string; dot: string; hex: string };
 
@@ -19,10 +20,17 @@ export const ROLE_LABEL: Record<Role, string> = {
   HEAD: "Design Head",
   MANAGER: "Design Manager",
   ASSOCIATE_DESIGNER: "Associate Designer",
-  TEAM_MEMBER: "Team Member",
+  MID_DESIGNER: "Mid Designer",
 };
 
-export const DESIGNER_ROLES = ["ASSOCIATE_DESIGNER", "TEAM_MEMBER"] as const satisfies readonly Role[];
+export const DESIGNER_ROLES = ["MID_DESIGNER", "ASSOCIATE_DESIGNER"] as const satisfies readonly Role[];
+
+/** Approval of projects requested by Design Managers. */
+export const PROJECT_APPROVAL: Record<ProjectApproval, Meta> = {
+  PENDING: { label: "Awaiting approval", badge: "bg-amber-100 text-amber-900 ring-amber-200", dot: "bg-amber-400", hex: "#d97706" },
+  APPROVED: { label: "Approved", badge: "bg-[#dcf2e8] text-[#1f7a52] ring-transparent", dot: "bg-[#4fb38a]", hex: "#2f9a6e" },
+  REJECTED: { label: "Declined", badge: "bg-[#fde2e1] text-[#b23b3b] ring-transparent", dot: "bg-[#e26d6d]", hex: "#d64545" },
+};
 
 export const PROJECT_STATUSES = [
   "NOT_STARTED",

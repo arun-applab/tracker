@@ -3,9 +3,10 @@ import { db } from "@/lib/db";
 import { badRequest, forbidden, notFound } from "@/lib/errors";
 import { toDbDate, weekDays, weekStart } from "@/lib/dates";
 import { todayIso } from "@/lib/server-time";
-import { ACTIVE_PROJECT_STATUSES, OCCUPYING_STATUSES } from "@/lib/constants";
+import { ACTIVE_PROJECT_STATUSES, AVAILABILITY, OCCUPYING_STATUSES } from "@/lib/constants";
 import type { AvailabilityStatus, Role } from "@/generated/prisma/enums";
 import type { Actor } from "@/server/actor";
+import { notify } from "@/server/notify";
 import { canSetAvailability, canViewAvailability, isHead } from "@/server/permissions";
 
 /**
@@ -48,11 +49,11 @@ const userSelect = {
   availabilityOverrideBy: { select: { id: true, name: true } },
   skills: { select: { skill: { select: { name: true } } }, orderBy: { skill: { name: "asc" } } },
   assignments: {
-    where: { project: { status: { in: ACTIVE_PROJECT_STATUSES } } },
+    where: { project: { status: { in: ACTIVE_PROJECT_STATUSES }, approval: "APPROVED" } },
     select: { assignedBy: { select: { id: true, name: true, role: true } }, project: { select: { id: true, name: true, status: true } } },
   },
   managedProjects: {
-    where: { project: { status: { in: ACTIVE_PROJECT_STATUSES } } },
+    where: { project: { status: { in: ACTIVE_PROJECT_STATUSES }, approval: "APPROVED" } },
     select: { project: { select: { id: true, name: true, status: true } } },
   },
 } as const;
@@ -110,7 +111,7 @@ export async function getAvailability(actor: Actor): Promise<AvailabilityTeam[]>
     orderBy: { name: "asc" },
     select: {
       ...userSelect,
-      reports: { where: { isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "TEAM_MEMBER"] } }, orderBy: [{ role: "asc" }, { name: "asc" }], select: userSelect },
+      reports: { where: { isActive: true, role: { in: ["ASSOCIATE_DESIGNER", "MID_DESIGNER"] } }, orderBy: [{ role: "asc" }, { name: "asc" }], select: userSelect },
     },
   });
   const hours = await weekHours();
@@ -135,5 +136,14 @@ export async function setAvailability(actor: Actor, userId: string, override: Av
     where: { id: userId },
     data: { availabilityOverride: override, availabilityOverrideAt: override ? new Date() : null, availabilityOverrideById: override ? actor.id : null },
   });
+  if (actor.id !== userId) {
+    await notify([userId], {
+      type: "availability",
+      title: "Your availability was updated",
+      body: override ? `${actor.name} set your status to ${AVAILABILITY[override].label}.` : `${actor.name} switched your status back to automatic.`,
+      link: "/",
+      actorId: actor.id,
+    });
+  }
   return { id: userId };
 }

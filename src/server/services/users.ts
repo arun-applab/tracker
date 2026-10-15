@@ -37,7 +37,7 @@ export async function listManagers() {
 }
 
 async function assertValidManager(managerId: string | null | undefined) {
-  if (!managerId) throw badRequest("Associate Designers and Team Members must report to a Design Manager.");
+  if (!managerId) throw badRequest("Associate Designers and Mid Designers must report to a Design Manager.");
   const m = await db.user.findUnique({ where: { id: managerId }, select: { role: true, isActive: true } });
   if (!m || m.role !== "MANAGER" || !m.isActive) throw badRequest("Pick an active Design Manager.");
 }
@@ -52,7 +52,7 @@ export async function createUser(actor: Actor, input: z.infer<typeof userCreate>
   let { managerId } = input;
   if (isManager(actor)) {
     // Managers add designers into their own team only.
-    if (!isDesignerRole(role)) throw forbidden("Design Managers can add Associate Designers and Team Members only.");
+    if (!isDesignerRole(role)) throw forbidden("Design Managers can add Associate Designers and Mid Designers only.");
     managerId = actor.id;
   } else if (!isHead(actor)) {
     throw forbidden();
@@ -118,14 +118,11 @@ export async function updateUser(actor: Actor, id: string, input: z.infer<typeof
     }
     if (input.password) data.passwordHash = await bcrypt.hash(input.password, 10);
   } else {
-    // Manager editing their own team member: name, email, title, AD ↔ TM role.
-    if (input.role !== undefined) {
-      if (!isDesignerRole(input.role)) throw forbidden("Design Managers can only switch between Associate Designer and Team Member.");
-      data.role = input.role;
-    }
+    // Manager editing their own team member: name, email and job title. Roles are Head-only.
+    if (input.role !== undefined && input.role !== target.role) throw forbidden("Only the Design Head can change someone's role.");
     if (input.managerId !== undefined && input.managerId !== actor.id) throw forbidden("Only the Design Head can move people between teams.");
     if (input.isActive !== undefined) throw forbidden("Only the Design Head can deactivate accounts.");
-    if (input.password) throw forbidden("Only the Design Head can reset passwords.");
+    if (input.password) throw forbidden("Only the Design Head can set another person's password.");
   }
 
   await db.user.update({ where: { id }, data });
@@ -159,4 +156,13 @@ export async function setUserSkills(actor: Actor, userId: string, names: string[
     for (const skillId of ids) await tx.userSkill.create({ data: { userId, skillId } });
   });
   return { id: userId, count: wanted.size };
+}
+
+/** Anyone can change their own password (current password required). */
+export async function changeOwnPassword(actor: Actor, currentPassword: string, newPassword: string) {
+  const me = await db.user.findUnique({ where: { id: actor.id }, select: { passwordHash: true } });
+  if (!me) throw notFound("User not found");
+  if (!(await bcrypt.compare(currentPassword, me.passwordHash))) throw badRequest("Your current password is incorrect.");
+  await db.user.update({ where: { id: actor.id }, data: { passwordHash: await bcrypt.hash(newPassword, 10) } });
+  return { ok: true };
 }

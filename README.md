@@ -1,10 +1,22 @@
 # Design Project Tracker
 
-Internal web app for the Applab design department: project tracking, time logging with discussion threads, Figma links, skills, team availability and a suggestions corner — with role-based access for the Design Head, Design Managers, Associate Designers and Team Members.
+Internal web app for the Applab design department: project tracking, time logging with discussion threads, Figma links, skills, team availability and a suggestions corner — with role-based access for the Design Head, Design Managers, Associate Designers and Mid Designers.
 
 **Stack:** Next.js 15 (App Router) · TypeScript · Tailwind CSS v4 + shadcn/ui · Figtree font (self-hosted) · Prisma 7 · PostgreSQL (hosted on Railway) · NextAuth (credentials) · Recharts
 
 ---
+
+## Quick start on a Mac (localhost)
+
+1. Install **Node.js LTS** (nodejs.org) and **Postgres.app** (postgresapp.com). Open Postgres.app and click **Initialize** / **Start**.
+2. Unzip the project, open Terminal in the `design-project-tracker` folder and run:
+   ```bash
+   bash scripts/setup-local.sh
+   npm run dev
+   ```
+3. Open http://localhost:3000 and sign in as `prasun@applab.qa` / `Password123!`.
+
+The script creates a `design_tracker` database, writes `.env`, installs packages, creates the tables and loads the sample team. Run it again any time to reset the local data (`SKIP_SEED=1 bash scripts/setup-local.sh` keeps your data).
 
 ## 1. Setup
 
@@ -39,6 +51,9 @@ Use a separate database for local development — never point your laptop at the
 | `NEXTAUTH_SECRET` | output of `openssl rand -base64 32` | Required. Signs session tokens |
 | `NEXTAUTH_URL` | `https://tracker-production.up.railway.app` | Public URL of the app |
 | `APP_TIMEZONE` | `Asia/Qatar` | Defines "today", the Mon–Sun week and the 7-day backdate window |
+| `VAPID_PUBLIC_KEY` | from `npx web-push generate-vapid-keys` | Optional. Turns on browser push notifications |
+| `VAPID_PRIVATE_KEY` | (same command) | Optional. Keep secret |
+| `VAPID_SUBJECT` | `mailto:design@applab.qa` | Optional. Contact address sent to push services |
 
 ---
 
@@ -51,6 +66,7 @@ Use a separate database for local development — never point your laptop at the
    - `NEXTAUTH_SECRET` = a long random string
    - `NEXTAUTH_URL` = the domain from Settings → Networking → Generate Domain (with `https://`)
    - `APP_TIMEZONE` = `Asia/Qatar`
+   - Push notifications (optional): run `npx web-push generate-vapid-keys` once on your Mac and add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` (`mailto:you@applab.qa`). Generate them once and keep them — changing them later means everyone has to turn notifications on again.
 4. **Deploy.** Railway runs `npm install` → `npm run build` → `npm start`. `npm start` runs `prisma migrate deploy` first, so the tables are created automatically on the first deploy.
 5. **Data** (from your Mac, using the Postgres service's `DATABASE_PUBLIC_URL`):
    - Your existing data: `DATABASE_URL="<DATABASE_PUBLIC_URL>" npm run db:copy-from-sqlite` — copies everything from `dev.db` in one transaction. It refuses to run if the database already has users (add `-- --force` to wipe and copy again).
@@ -79,10 +95,10 @@ The people and reporting lines come from the Applab design team chart:
 | Design Manager (no team yet) | Mohamed Inshaf | `inshaf@applab.qa` |
 | Design Manager (no team yet) | Sumesh Sugathan | `sumesh@applab.qa` |
 | Associate Designer (Arun's team) | Akash M | `akash.m@applab.qa` |
-| Team Member · UI Designer (Ishak's team) | Asma Belazi | `asma.b@applab.qa` |
-| Team Member · UX Specialist (Sanya's team) | Aditya Sharma | `aditya.s@applab.qa` |
+| Mid Designer · UI Designer (Ishak's team) | Asma Belazi | `asma.b@applab.qa` |
+| Mid Designer · UX Specialist (Sanya's team) | Aditya Sharma | `aditya.s@applab.qa` |
 
-All 16 designers are seeded with the emails from the team list (e.g. `ajay.v@`, `rusna.f@`, `dilshikka@`, `shehab.b@`). Emails are case-insensitive at sign-in. Titles that start with "Associate" become **Associate Designer**; the others (UI Designer, UX Specialist) become **Team Member** — the job title is shown everywhere.
+All 16 designers are seeded with the emails from the team list (e.g. `ajay.v@`, `rusna.f@`, `dilshikka@`, `shehab.b@`). Emails are case-insensitive at sign-in. Titles that start with "Associate" become **Associate Designer**; the others (UI Designer, UX Specialist) become **Mid Designer** — the job title is shown everywhere.
 
 Projects, time entries, comments, starter skills and suggestions are **sample data** so every screen has content. Delete or replace them freely.
 
@@ -90,19 +106,44 @@ Projects, time entries, comments, starter skills and suggestions are **sample da
 
 ## 3. How the workflow works
 
-| | Design Head | Design Manager | Associate Designer / Team Member |
+| | Design Head | Design Manager | Associate Designer / Mid Designer |
 | --- | --- | --- | --- |
-| Projects | Creates projects, edits details, assigns **one or more** Design Managers; sees **all** projects | Sees only projects assigned to them; **onboards people from their own team or borrows from any other team**; changes status; **cannot create** projects | Sees only projects they're onboarded to (including ones they're borrowed into) |
+| Projects | Creates projects (approved straight away), edits details, assigns **one or more** Design Managers; **approves or declines** managers' project requests; sees **all** projects | Sees projects assigned to them; **requests new projects** (they wait for the Head's approval); once approved, **onboards people from their own team or borrows from any other team** and changes status | Sees only projects they're onboarded to (including ones they're borrowed into) |
 | Figma links | View / add / remove any | View / add; remove own or on their projects | View / add; remove own |
 | Time | Views all entries; comments on any entry | Logs **own** time and time for **own team** on their projects; edits any entry on their projects | Logs own time; edits/deletes own entries for **7 days** |
 | Hours per person | All projects | Projects they manage | — (only their own timesheet and hours) |
 | Entry discussion | Comment on any entry | Ask about entries on their projects | Reply on their own entries |
 | Availability | Set anyone's | Set own + own team's | Set own |
 | Skills | Add / edit skills for everyone (incl. self and managers) | View | View own (account menu) |
-| Users | Manage everyone | Add / edit people in own team | — |
+| Users | Manage everyone, **change roles** (Design Manager / Mid Designer / Associate Designer) | Add people to own team; edit name, email, job title (not roles) | — |
+| Password | Change own; set anyone's in Users & Skills | Change own (account menu → Change password) | Change own |
 | Suggestions | Inbox, threaded replies, status | Submit (optionally anonymous), reply | — |
 
 Rules are enforced **server-side** in `src/server/permissions.ts` and the services in `src/server/services/*`; the UI only hides what the API would refuse anyway.
+
+### Project requests (Design Manager → Design Head)
+
+1. A Design Manager clicks **Request project** (Projects page or dashboard). They're assigned to it automatically and can add co-managers.
+2. The project is **Awaiting approval**: the Head gets a notification and sees it at the top of the dashboard and Projects page. Nobody can be onboarded, the status can't change and no time can be logged yet.
+3. The Head **approves** it (managers are notified and can onboard designers) or **declines** it with a reason. A declined request shows the reason; the manager edits it and it's resubmitted automatically.
+4. Projects the Head creates are approved straight away.
+
+### Notifications
+
+The bell in the top bar shows notifications (live — checked every 20 seconds and whenever the tab gets focus, with a pop-up toast for anything new) and a **Replies** tab for time-entry threads waiting on you. You're notified when:
+
+- a project request is submitted / resubmitted (Head), approved or declined (manager)
+- you're assigned to a project (manager), onboarded or removed (designer), or someone from your team is borrowed (home manager)
+- a project's status changes (its team and the Head)
+- someone comments on a time entry you're part of, or a manager logs time for you
+- your availability is changed by someone else
+- suggestions: new ones and replies (Head), replies and status changes (author)
+
+**Browser push:** with the `VAPID_*` variables set, the bell has a **Turn on** button that asks the browser for permission; after that notifications pop up on the desktop/phone even when the tab is closed. Each person turns it on per browser. (Push needs HTTPS — fine on Railway; on iPhone it works only when the site is added to the Home Screen.)
+
+### Sorting
+
+Tables sort by clicking a column header (click again to flip). Lists default to newest first (time entries by date, projects by creation date, suggestions by latest activity); people tables default to role, then name. Projects and Suggestions also have a sort menu.
 
 ### Time entries
 
@@ -116,6 +157,8 @@ Rules are enforced **server-side** in `src/server/permissions.ts` and the servic
 All dark buttons, active nav pills and dark tiles use one gradient token. Change `--ink-start` and `--ink-end` at the top of `src/app/globals.css` to re-theme them.
 
 ### Availability
+
+With a filter on (e.g. click **Available**), only teams that have someone matching are shown.
 
 Everyone sets their status from the **status pill in the top bar** (Available, Partially Available, Occupied, On Leave, or *Automatic*). Automatic = from active projects: any In Progress / Under Review project → Occupied; only Not Started / On Hold → Partially Available; none → Available. Managers can change their team's status from **Availability** or **My Team**; the badge shows whether it was set by the person or by someone else.
 
@@ -175,7 +218,10 @@ src/
 | `GET/POST /api/time-logs` | List with filters / create |
 | `PATCH/DELETE /api/time-logs/:id` | Edit / delete |
 | `GET/POST /api/time-logs/:id/comments` | Entry discussion thread |
-| `GET /api/inbox` | Threads waiting for your reply |
+| `POST /api/projects/:id/review` | Head: approve / decline a project request (`{ decision, note }`) |
+| `GET /api/notifications`, `POST /api/notifications/read` | Notification feed (+ threads waiting for your reply) / mark read |
+| `POST/DELETE /api/push` | Register / remove this browser for push |
+| `POST /api/me/password` | Change your own password |
 | `POST /api/projects/:id/links`, `DELETE …/links/:linkId` | Figma links |
 | `PUT /api/users/:id/skills`, `GET /api/skills` | Skills |
 | `GET/POST /api/users`, `PATCH /api/users/:id` | User management |

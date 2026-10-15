@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/components/app/api-client";
 import { EmptyState } from "@/components/app/empty-state";
 import type { LogFormOptions, LogRow } from "@/components/app/log-types";
+import { SortHeaderButton, useSort, type SortDir, type SortValue } from "@/components/app/sortable-table";
 import { ThreadDialog } from "@/components/app/thread-dialog";
 import { TimeLogDialog } from "@/components/app/time-log-dialog";
 import { BACKDATE_LIMIT_DAYS, ROLE_LABEL, TASK_TYPE_LABEL } from "@/lib/constants";
@@ -29,6 +30,29 @@ type Props = {
   emptyAction?: React.ReactNode;
 };
 
+type Col = "date" | "person" | "project" | "task" | "hours" | "loggedBy" | "discussion";
+const FIRST_DIR: Record<Col, SortDir> = { date: "desc", person: "asc", project: "asc", task: "asc", hours: "desc", loggedBy: "asc", discussion: "desc" };
+const COL_INDEX: Col[] = ["date", "person", "project", "task", "hours", "loggedBy", "discussion"];
+
+function valueOf(l: LogRow, col: Col): SortValue {
+  switch (col) {
+    case "date":
+      return l.date;
+    case "person":
+      return l.user.name;
+    case "project":
+      return l.project.name;
+    case "task":
+      return TASK_TYPE_LABEL[l.taskType];
+    case "hours":
+      return l.hours;
+    case "loggedBy":
+      return l.loggedBySelf ? "" : l.loggedBy.name;
+    case "discussion":
+      return (l.awaitingMe ? 1000 : 0) + l.commentCount;
+  }
+}
+
 export function LogTable({
   logs,
   currentUserId,
@@ -43,6 +67,12 @@ export function LogTable({
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<LogRow | null>(null);
   const [thread, setThread] = useState<string | null>(null);
+  // Newest first by default; click a header to sort by it. Ties keep the server order (latest logged first).
+  const { sorted, sort, toggle } = useSort(logs, (l, i) => valueOf(l, COL_INDEX[i]), { col: 0, dir: "desc" });
+  const head = (col: Col, label: string, align?: "right") => {
+    const i = COL_INDEX.indexOf(col);
+    return <SortHeaderButton label={label} active={sort.col === i} dir={sort.dir} onClick={() => toggle(i, FIRST_DIR[col])} align={align} />;
+  };
 
   async function remove(log: LogRow) {
     setBusy(true);
@@ -66,17 +96,17 @@ export function LogTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-5">Date</TableHead>
-              {showPerson && <TableHead>Person</TableHead>}
-              {showProject && <TableHead>Project</TableHead>}
-              <TableHead>Task</TableHead>
-              <TableHead className="text-right">Hours</TableHead>
-              <TableHead>Logged by</TableHead>
-              <TableHead className="pr-5 text-right">Discussion & actions</TableHead>
+              <TableHead className="pl-5">{head("date", "Date")}</TableHead>
+              {showPerson && <TableHead>{head("person", "Person")}</TableHead>}
+              {showProject && <TableHead>{head("project", "Project")}</TableHead>}
+              <TableHead>{head("task", "Task")}</TableHead>
+              <TableHead className="text-right">{head("hours", "Hours", "right")}</TableHead>
+              <TableHead>{head("loggedBy", "Logged by")}</TableHead>
+              <TableHead className="pr-5 text-right">{head("discussion", "Discussion & actions", "right")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {logs.map((l) => (
+            {sorted.map((l) => (
               <TableRow key={l.id}>
                 <TableCell className="whitespace-nowrap pl-5 tabular">{formatDate(l.date)}</TableCell>
                 {showPerson && (

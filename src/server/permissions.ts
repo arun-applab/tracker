@@ -2,18 +2,20 @@
 // goes through these helpers, so the UI and the API can never disagree.
 //
 //  • Design Head creates projects and assigns one or more Design Managers.
+//  • Design Managers can also create projects; those wait for the Head's approval.
+//    Until approved, nobody can be onboarded and no time can be logged.
 //  • Assigned managers onboard people from their own team or borrow from other teams.
 //  • A project is visible only to the Head, its assigned managers and its members.
 //  • Time entries have no approval step; questions go in a comment thread.
 
-import type { ProjectStatus, Role } from "@/generated/prisma/enums";
+import type { ProjectApproval, ProjectStatus, Role } from "@/generated/prisma/enums";
 import type { Actor } from "@/server/actor";
 import { BACKDATE_LIMIT_DAYS } from "@/lib/constants";
 import { diffDays, toIso } from "@/lib/dates";
 
 export const isHead = (a: Pick<Actor, "role">) => a.role === "HEAD";
 export const isManager = (a: Pick<Actor, "role">) => a.role === "MANAGER";
-export const isDesignerRole = (role: Role) => role === "ASSOCIATE_DESIGNER" || role === "TEAM_MEMBER";
+export const isDesignerRole = (role: Role) => role === "ASSOCIATE_DESIGNER" || role === "MID_DESIGNER";
 export const isDesigner = (a: Pick<Actor, "role">) => isDesignerRole(a.role);
 /** People who log their own time: designers and Design Managers (leads are working designers too). */
 export const logsOwnTime = (a: Pick<Actor, "role">) => isDesigner(a) || isManager(a);
@@ -30,14 +32,31 @@ export const isProjectMember = (a: Actor, p: ProjectAccess) => p.memberIds.inclu
 /** Head sees everything; everyone else only projects they're assigned to. */
 export const canViewProject = (a: Actor, p: ProjectAccess) => isHead(a) || isProjectManager(a, p) || isProjectMember(a, p);
 
-/** Name, client, dates, priority and manager assignment: Design Head only. */
-export const canEditProjectDetails = (a: Actor) => isHead(a);
-export const canCreateProject = (a: Actor) => isHead(a);
+/** Project-level checks also need the approval state and who requested it. */
+export type ProjectGate = ProjectAccess & { approval: ProjectApproval; createdById: string };
+export const gateOf = (p: Parameters<typeof accessOf>[0] & { approval: ProjectApproval; createdById: string }): ProjectGate => ({
+  ...accessOf(p),
+  approval: p.approval,
+  createdById: p.createdById,
+});
+export const isApproved = (p: { approval: ProjectApproval }) => p.approval === "APPROVED";
 
-export const canChangeStatus = (a: Actor, p: ProjectAccess) => isHead(a) || isProjectManager(a, p);
+/** Head creates approved projects; a Design Manager's project is a request for the Head. */
+export const canCreateProject = (a: Actor) => isHead(a) || isManager(a);
+export const needsApproval = (a: Actor) => !isHead(a);
+export const canReviewProject = (a: Actor) => isHead(a);
 
-/** Onboarding people (own team or borrowed from any other team): an assigned manager or the Head. */
-export const canOnboard = (a: Actor, p: ProjectAccess) => isHead(a) || isProjectManager(a, p);
+/**
+ * Name, client, dates, priority and managers: the Head always; the requesting manager
+ * while their request is pending or was rejected (editing a rejected request resubmits it).
+ */
+export const canEditProjectDetails = (a: Actor, p: ProjectGate) =>
+  isHead(a) || (isManager(a) && p.createdById === a.id && !isApproved(p));
+
+export const canChangeStatus = (a: Actor, p: ProjectGate) => isApproved(p) && (isHead(a) || isProjectManager(a, p));
+
+/** Onboarding people (own team or borrowed from any other team): an assigned manager or the Head, once approved. */
+export const canOnboard = (a: Actor, p: ProjectGate) => isApproved(p) && (isHead(a) || isProjectManager(a, p));
 
 /** Per-person / per-team hours: Head and the project's managers only. */
 export const canSeeTeamHours = (a: Actor, p: ProjectAccess) => isHead(a) || isProjectManager(a, p);
